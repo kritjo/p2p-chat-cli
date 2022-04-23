@@ -103,26 +103,26 @@ int main(int argc, char **argv) {
         &addrlen
     );
 
-    switch (bytes_received) {
-      case 0:
-        // Zero length datagrams are allowed. This is not an error.
-        continue;
-      case -1:
-        // -1 is error, and we should quit the server.
-        perror("recvfrom");
-        handle_exit();
-        exit(EXIT_FAILURE);
-      default:
-        // We should not do anything otherwise, but default case is added to show that explicitly
-        break;
+    if (bytes_received < 0) {
+      // -1 is error, and we should quit the server.
+      perror("recvfrom");
+      handle_exit();
+      exit(EXIT_FAILURE);
+    } else if (bytes_received < 12) {
+      // Zero length datagrams are allowed and not error.
+      // Min valid format datagram is "PKT 0 REG a" this is likely due to transmission error, do not send ack.
+      print_illegal_dram(incoming);
+      continue;
     }
 
     buf[bytes_received] = '\0';
 
-    char msg_delim = ' ';
+    char *msg_delim = " ";
 
     // Get first part of msg, should be "PKT"
-    char *msg_part = strtok(buf, &msg_delim);
+    char *msg_part = strtok(buf, msg_delim);
+
+    // On all checks, we test if msg_part is NULL first as strcmp declares that the parameters should not be null
     if (msg_part == NULL || strcmp(msg_part, "PKT") != 0) {
       // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
     }
 
     // Get second part of msg, should be "0" or "1"
-    msg_part = strtok(NULL, &msg_delim);
+    msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL ||
     (strcmp(msg_part, "0") != 0 && strcmp(msg_part, "1") != 0)) {
       // Illegal datagrams is expected so this is not an error.
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
     };
     enum command curr_command;
     // Get third part of msg, should be "REG" or "LOOKUP"
-    msg_part = strtok(NULL, &msg_delim);
+    msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL) {
       // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
     }
 
     // Get final part of msg, should be a nickname.
-    msg_part = strtok(NULL, &msg_delim);
+    msg_part = strtok(NULL, msg_delim);
     size_t nick_len = strlen(msg_part);
     if (msg_part == NULL || nick_len < 1 || nick_len > 20) {
       // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
@@ -221,17 +221,13 @@ int main(int argc, char **argv) {
         }
 
 
-
         if (insert_nick_node(curr_nick) == -1) {
           fprintf(stderr, "Nick table is full. Trying to clean.\n");
           delete_old_nick_nodes();
 
           if (insert_nick_node(curr_nick) == -1) {
             fprintf(stderr, "Nick table is full also after cleanup.\n");
-            free(curr_nick->registered_time);
-            free(curr_nick->nick);
-            free(curr_nick->addr);
-            free(curr_nick);
+            free_nick_node(curr_nick);
             continue;
           }
         }
