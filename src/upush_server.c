@@ -1,57 +1,50 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <search.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <string.h>
 #include <time.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <ctype.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <string.h>
 
 #include "send_packet.h"
+#include "nick_node.h"
+#include "network_utils.h"
 
-#define MAX_CLIENTS 100
 #define MAX_MSG 1460 // Longest msg can be 20 char + 2*nicklen + message
                      // Max message length is 1400.
                      // Assume that pkt num is 0 or 1.
                      // Nicklen is max 20 char
 
-typedef struct {
-    struct sockaddr_storage *addr;
-    time_t *registered_time;
-} nick_t;
-
 size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...);
-
-char *get_addr(struct sockaddr_storage addr, char *buf, size_t buflen);
-
-char *get_port(struct sockaddr_storage addr, char *buf);
 
 void handle_exit(void);
 
-void handle_sigint();
+void handle_sig_terminate(int sig);
 
 int get_bound_socket(struct addrinfo hints, char *name, char *service);
 
 void print_illegal_dram(struct sockaddr_storage addr);
 
-socklen_t get_addr_len(struct sockaddr_storage addr);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+void handle_sig_ignore(int sig) {}
+#pragma GCC diagnostic pop
 
 int socketfd = 0;
-char *nicks[MAX_CLIENTS];
-int reg_clients = 0;
 
 int main(int argc, char **argv) {
   char *port, loss_probability;
 
-  // Create a hash table to store client registrations
-  if (!hcreate((size_t) MAX_CLIENTS)) {
-    perror("hcreate");
-  }
+  // Handle termination signals gracefully in order to free memory
+  signal(SIGINT, handle_sig_terminate);
+  signal(SIGTERM, handle_sig_terminate);
 
-  signal(SIGINT, handle_sigint);
+  // Explicitly ignore unused USR signals
+  signal(SIGUSR1, handle_sig_ignore);
+  signal(SIGUSR2, handle_sig_ignore);
 
   // Check that we have enough and correct CLI arguments
   if (argc == 3) {
@@ -175,6 +168,8 @@ int main(int argc, char **argv) {
     msg_part = strtok(NULL, &msg_delim);
     size_t nick_len = strlen(msg_part);
     if (msg_part == NULL || nick_len < 1 || nick_len > 20) {
+      // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
+      // likely due to a transmission problem.
       // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
@@ -196,24 +191,28 @@ int main(int argc, char **argv) {
       }
     }
     if (!legal_nick) {
+      // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
+      // likely due to a transmission problem.
       // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
     }
 
-    ENTRY e, *e_res;
-    e.key = nick;
-    e_res = hsearch(e, FIND);
+    nick_node_t *result_node = find_nick_node(nick);
 
     if (curr_command == REG) {
       // Check if nick exists, in that case, replace current address in table.
-      if (e_res == NULL) {
+      if (result_node == NULL) {
         // Now we know that the nick does not exist.
-        nick_t *curr_nick = malloc(sizeof(nick_t));
+        nick_node_t *curr_nick = malloc(sizeof(nick_node_t));
+        curr_nick->nick = malloc((nick_len + 1) * sizeof(char));
+        strcpy(curr_nick->nick, nick);
         curr_nick->registered_time = malloc(sizeof(time_t));
         curr_nick->addr = malloc(sizeof(struct sockaddr_storage));
         *curr_nick->addr = incoming;
         time(curr_nick->registered_time);
+        curr_nick->next = 0;
+        curr_nick->prev = 0;
 
         if (*curr_nick->registered_time == (time_t) -1) {
           perror("Could not get system time");
@@ -221,28 +220,31 @@ int main(int argc, char **argv) {
           exit(EXIT_FAILURE);
         }
 
-        e.key = malloc((nick_len + 1) * sizeof(char));
-        strcpy(e.key, nick);
-        e.data = curr_nick;
-        e_res = hsearch(e, ENTER);
 
-        if (e_res == NULL) {
-          fprintf(stderr, "Nick table is full\n");
-          free(curr_nick->registered_time);
-          free(curr_nick);
-          continue; // TODO: Should probably check if we are missing heartbeats.
+
+        if (insert_nick_node(curr_nick) == -1) {
+          fprintf(stderr, "Nick table is full. Trying to clean.\n");
+          delete_old_nick_nodes();
+
+          if (insert_nick_node(curr_nick) == -1) {
+            fprintf(stderr, "Nick table is full also after cleanup.\n");
+            free(curr_nick->registered_time);
+            free(curr_nick->nick);
+            free(curr_nick->addr);
+            free(curr_nick);
+            continue;
+          }
         }
 
         // Registration completed send ACK
         if (send_ack(incoming, pkt_num, 1, "OK") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
-        nicks[reg_clients++] = e.key;
       } else {
         // Update the nick with the incoming adr and current time.
         // This implies that the code flow will end up here for both updates
         // to an entry from a new addr, and heartbeats.
-        nick_t *curr_nick = (nick_t *) e_res->data;
+        nick_node_t *curr_nick = find_nick_node(nick);
 
         *curr_nick->addr = incoming;
         time(curr_nick->registered_time);
@@ -257,7 +259,7 @@ int main(int argc, char **argv) {
       }
     } else {
       // We can be certain that we are now in lookup phase due to the binary possibilities of the conditional variable.
-      if (e_res == NULL) {
+      if (result_node == NULL) {
         if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
@@ -266,9 +268,8 @@ int main(int argc, char **argv) {
 
       time_t current_time;
       time(&current_time);
-      nick_t *curr_nick = (nick_t *) e_res->data;
 
-      if (current_time - *curr_nick->registered_time > 30) {
+      if (current_time - *result_node->registered_time > TIMEOUT) {
         if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
@@ -368,54 +369,15 @@ size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) 
   return send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &addr, get_addr_len(addr));
 }
 
-char *get_addr(struct sockaddr_storage addr, char *buf, size_t buflen) {
-  if (addr.ss_family == AF_INET) {
-    inet_ntop(addr.ss_family, &((struct sockaddr_in*) &addr)->sin_addr, buf, buflen);
-  } else {
-    inet_ntop(addr.ss_family, &((struct sockaddr_in6*) &addr)->sin6_addr, buf, buflen);
-  }
-  return buf;
-}
-
-socklen_t get_addr_len(struct sockaddr_storage addr) {
-  if (addr.ss_family == AF_INET) {
-    return INET_ADDRSTRLEN;
-  } else {
-    return INET6_ADDRSTRLEN;
-  }
-}
-
-char *get_port(struct sockaddr_storage addr, char *buf) {
-  unsigned short port;
-  if (addr.ss_family == AF_INET) {
-    port = ntohs(((struct sockaddr_in*) &addr)->sin_port);
-  } else {
-    port = ntohs(((struct sockaddr_in6*) &addr)->sin6_port);
-  }
-  sprintf(buf, "%hu", port);
-  return buf;
-}
-
-void handle_sigint() {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+void handle_sig_terminate(int sig) {
+#pragma GCC diagnostic pop
   handle_exit();
   exit(EXIT_SUCCESS);
 }
 
 void handle_exit(void) {
   if (socketfd != 0) close(socketfd);
-  while (--reg_clients >= 0) {
-    ENTRY e, *e_res;
-    e.key = nicks[reg_clients];
-    e_res = hsearch(e, FIND);
-    if (e_res == NULL) {
-      fprintf(stderr, "Could not find client that we expected to be in table!\n");
-      continue; // Should continue to free as much memory as possible
-    }
-    nick_t *curr_nick = (nick_t *) e_res->data;
-    free(curr_nick->registered_time);
-    free(curr_nick->addr);
-    free(curr_nick);
-    free(e.key);
-  }
-  hdestroy();
+  delete_all_nick_nodes();
 }

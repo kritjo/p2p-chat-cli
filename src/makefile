@@ -8,8 +8,8 @@ all: upush_server
 %.o : %.c
 	$(CC) $(CFLAGS) $(OBJECT_FLAGS) $< -o $@
 
-upush_server: upush_server.o send_packet.o
-	$(CC) $(CFLAGS) upush_server.o send_packet.o -o upush_server
+upush_server: upush_server.o send_packet.o nick_node.o network_utils.o
+	$(CC) $(CFLAGS) upush_server.o send_packet.o nick_node.o network_utils.o -o upush_server
 
 clean:
 	rm -f upush_server *.o
