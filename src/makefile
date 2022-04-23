@@ -1,5 +1,5 @@
 CC ?= gcc #Set c-compiler to gcc if env has not already set it to something else
-CFLAGS ?= -Wall -Wextra -std=gnu11 #Set CFLAGS to give us additional warnings if these are not already set
+CFLAGS ?= -Wall -Wextra -std=gnu11 -g #Set CFLAGS to give us additional warnings if these are not already set
 OBJECT_FLAGS = -c
 
 all: upush_server
