@@ -23,11 +23,11 @@ typedef struct {
     time_t *registered_time;
 } nick_t;
 
-int send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...);
+size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...);
 
 char *get_addr(struct sockaddr_storage addr, char *buf, size_t buflen);
 
-char *get_port(struct sockaddr_storage addr, char *buf, size_t buflen);
+char *get_port(struct sockaddr_storage addr, char *buf);
 
 void handle_exit(void);
 
@@ -42,7 +42,6 @@ socklen_t get_addr_len(struct sockaddr_storage addr);
 int socketfd = 0;
 char *nicks[MAX_CLIENTS];
 int reg_clients = 0;
-const char msg_delim = ' ';
 
 int main(int argc, char **argv) {
   char *port, loss_probability;
@@ -127,6 +126,8 @@ int main(int argc, char **argv) {
 
     buf[bytes_received] = '\0';
 
+    char msg_delim = ' ';
+
     // Get first part of msg, should be "PKT"
     char *msg_part = strtok(buf, &msg_delim);
     if (msg_part == NULL || strcmp(msg_part, "PKT") != 0) {
@@ -172,8 +173,8 @@ int main(int argc, char **argv) {
 
     // Get final part of msg, should be a nickname.
     msg_part = strtok(NULL, &msg_delim);
-    size_t nick_len;
-    if (msg_part == NULL || (nick_len = strlen(msg_part)) < 1 || nick_len > 20) {
+    size_t nick_len = strlen(msg_part);
+    if (msg_part == NULL || nick_len < 1 || nick_len > 20) {
       // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
@@ -184,16 +185,22 @@ int main(int argc, char **argv) {
     if (msg_part[nick_len - 1] == '\n') {
       strncpy(nick, msg_part, nick_len - 1);
       nick[nick_len - 1] = '\0';
+      nick_len--;
     }
 
+    char legal_nick = 1;
     // Check that the nick is legal. That is: only ascii characters and only alpha characters.
     for (size_t i = 0; i < nick_len; i++) {
-      if (!isascii(nick[i]) || !isalpha(nick[i])) {
-        // Illegal datagrams is expected so this is not an error.
-        print_illegal_dram(incoming);
-        continue;
+      if (!isascii(nick[i]) || !isalpha(nick[i]) || isdigit(nick[i])) {
+        legal_nick = 0;
       }
     }
+    if (!legal_nick) {
+      // Illegal datagrams is expected so this is not an error.
+      print_illegal_dram(incoming);
+      continue;
+    }
+
     ENTRY e, *e_res;
     e.key = nick;
     e_res = hsearch(e, FIND);
@@ -214,7 +221,7 @@ int main(int argc, char **argv) {
           exit(EXIT_FAILURE);
         }
 
-        e.key = malloc(sizeof(char *));
+        e.key = malloc((nick_len + 1) * sizeof(char));
         strcpy(e.key, nick);
         e.data = curr_nick;
         e_res = hsearch(e, ENTER);
@@ -227,10 +234,10 @@ int main(int argc, char **argv) {
         }
 
         // Registration completed send ACK
-        if (send_ack(incoming, pkt_num, 1, "OK") == -1) {
+        if (send_ack(incoming, pkt_num, 1, "OK") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
-        nicks[reg_clients++] = nick;
+        nicks[reg_clients++] = e.key;
       } else {
         // Update the nick with the incoming adr and current time.
         // This implies that the code flow will end up here for both updates
@@ -244,14 +251,14 @@ int main(int argc, char **argv) {
           handle_exit();
           exit(EXIT_FAILURE);
         }
-        if (send_ack(incoming, pkt_num, 1, "OK") == -1) {
+        if (send_ack(incoming, pkt_num, 1, "OK") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
       }
     } else {
       // We can be certain that we are now in lookup phase due to the binary possibilities of the conditional variable.
       if (e_res == NULL) {
-        if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == -1) {
+        if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
         continue;
@@ -262,19 +269,19 @@ int main(int argc, char **argv) {
       nick_t *curr_nick = (nick_t *) e_res->data;
 
       if (current_time - *curr_nick->registered_time > 30) {
-        if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == -1) {
+        if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
         continue;
       }
       char addr_str[INET6_ADDRSTRLEN];
-      char *port_str[6];
+      char port_str[7];
       if (send_ack(incoming,pkt_num, 5,
                "NICK",
                nick,
                get_addr(incoming, (char *) &addr_str, INET6_ADDRSTRLEN),
                "PORT",
-               get_port(incoming, (char *) port_str, 6)) == -1) {
+               get_port(incoming, (char *) port_str)) == (size_t) -1) {
         fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
       }
     }
@@ -283,10 +290,10 @@ int main(int argc, char **argv) {
 
 void print_illegal_dram(struct sockaddr_storage addr) {
   char addr_str[INET6_ADDRSTRLEN];
-  char *port_str[6];
-  printf("Recived illegal datagram from: %s:%s\n",
-         get_addr(addr, addr_str, INET6_ADDRSTRLEN),
-         get_port(addr, (char *) port_str, 6));
+  char port_str[7];
+  get_addr(addr, addr_str, INET6_ADDRSTRLEN);
+  get_port(addr, port_str);
+  printf("Recived illegal datagram from: %s:%s\n", addr_str, port_str);
 }
 
 int get_bound_socket(struct addrinfo hints, char* name, char *service) {
@@ -328,7 +335,7 @@ int get_bound_socket(struct addrinfo hints, char* name, char *service) {
   return curr_socket;
 }
 
-int send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) {
+size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) {
   va_list args;
   va_start(args, num_args);
 
@@ -338,7 +345,6 @@ int send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) {
   size_t msg_len = 6; // "ACK 0"
   int n = num_args;
   while (n) {
-    printf("adding arg\n");
     msg_len += 1; // Leading space
     args_each[num_args - n] = va_arg(args, char *);
     msg_len += strlen(args_each[num_args - n]);
@@ -359,21 +365,7 @@ int send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) {
   hints.ai_family = addr.ss_family;
   hints.ai_socktype = SOCK_DGRAM;
 
-  // Get socket for sending ack
-  char addr_buf[INET6_ADDRSTRLEN];
-  char port_buf[6];
-  int send_sock = get_bound_socket(hints,
-                                   get_addr(addr, addr_buf, INET6_ADDRSTRLEN),
-                                   get_port(addr, port_buf, 6));
-  if (send_sock == -1) {
-    fprintf(stderr, "get_bound_socket() in send_ack() failed.\n");
-    return -1;
-  }
-
-  send_packet(send_sock, msg, msg_len, 0, (struct sockaddr *) &addr, get_addr_len(addr));
-
-  close(send_sock);
-  return 0;
+  return send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &addr, get_addr_len(addr));
 }
 
 char *get_addr(struct sockaddr_storage addr, char *buf, size_t buflen) {
@@ -393,12 +385,14 @@ socklen_t get_addr_len(struct sockaddr_storage addr) {
   }
 }
 
-char *get_port(struct sockaddr_storage addr, char *buf, size_t buflen) {
+char *get_port(struct sockaddr_storage addr, char *buf) {
+  unsigned short port;
   if (addr.ss_family == AF_INET) {
-    inet_ntop(addr.ss_family, &((struct sockaddr_in*) &addr)->sin_port, buf, buflen);
+    port = ntohs(((struct sockaddr_in*) &addr)->sin_port);
   } else {
-    inet_ntop(addr.ss_family, &((struct sockaddr_in6*) &addr)->sin6_port, buf, buflen);
+    port = ntohs(((struct sockaddr_in6*) &addr)->sin6_port);
   }
+  sprintf(buf, "%hu", port);
   return buf;
 }
 
