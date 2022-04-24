@@ -84,8 +84,6 @@ char *pop_msg(nick_node_t *node) {
   return msg;
 }
 
-nick_node_t server;
-
 void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting) {
   lookup_node_t *new_lookup = malloc(sizeof(message_node_t));
   new_lookup->nick = nick;

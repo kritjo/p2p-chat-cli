@@ -3,6 +3,10 @@
 
 #include "nick_node_client.h"
 
+#define RE_0 10
+#define RE_1 11
+#define RE_2 12
+
 enum sendtype {MSG, LOOKUP};
 
 typedef struct send_node {

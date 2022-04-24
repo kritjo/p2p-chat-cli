@@ -36,6 +36,7 @@ static char *heartbeat_msg;
 static struct sockaddr_storage server;
 static recv_node_t *first_recv_node = NULL;
 static char *my_nick;
+static nick_node_t server_node;
 
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
@@ -182,6 +183,12 @@ int main(int argc, char **argv) {
   timespec.it_interval.tv_sec = timeout;
   timerfd_settime(timeoutfd, 0, &timespec, NULL);
 
+  server_node.type = SERVER;
+  server_node.available_to_send = 1;
+  server_node.next_pkt_num = "0";
+  server_node.addr = &server;
+  server_node.lookup_node = NULL;
+
   char buf[MAX_MSG + 1];
   ssize_t bytes_received;
   socklen_t addrlen = sizeof(struct sockaddr_storage);
@@ -288,6 +295,23 @@ int main(int argc, char **argv) {
       nick_node_t *search_result = find_nick_node(nick);
       if (search_result == NULL) {
         // Lookup
+        // Add message to back of msg queue
+        char *nick_persistant = malloc(sizeof(startmsg));
+        strcpy(nick_persistant, nick);
+        add_lookup(&server_node, nick_persistant, NULL);
+
+        // If client is available to send, add client to send_node and send msg
+        if (server_node.available_to_send == 1) {
+          server_node.available_to_send = 0;
+          send_node_t *new_node = malloc(sizeof(send_node_t));
+          new_node->nick_node = &server_node;
+          new_node->pkt_num = server_node.next_pkt_num;
+          new_node->msg = nick_persistant;
+          new_node->type = LOOKUP;
+          new_node->num_tries = 0;
+          insert_send_node(new_node);
+          send_msg(new_node);
+        }
         continue;
       }
 
@@ -298,11 +322,13 @@ int main(int argc, char **argv) {
 
       // If client is available to send, add client to send_node and send msg
       if (search_result->available_to_send == 1) {
+        search_result->available_to_send = 0;
         send_node_t *new_node = malloc(sizeof(send_node_t));
         new_node->nick_node = search_result;
         new_node->pkt_num = search_result->next_pkt_num;
         new_node->msg = new_msg;
         new_node->num_tries = 0;
+        new_node->type = MSG;
         insert_send_node(new_node);
         send_msg(new_node);
       }
@@ -317,17 +343,25 @@ int main(int argc, char **argv) {
 }
 
 void send_msg(send_node_t *node) {
-  if (strcmp(node->nick_node->nick, "_ SERVER _") == 0) {
+  if (node->type == LOOKUP) {
     // LOOKUP TYPE
     if (node->num_tries < 2) {
-
+      node->num_tries++;
+      unsigned long pkt_len = 12 + strlen(node->msg);
+      char pkt[pkt_len];
+      strcpy(pkt, "PKT ");
+      strcat(pkt, node->pkt_num);
+      strcat(pkt, " LOOKUP ");
+      strcat(pkt, node->nick_node->nick);
+      send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
     } else {
-      printf("NICK %s NOT REACHABLE\n", node->msg)
+      printf("NICK %s NOT REACHABLE\n", node->msg);
+      //TODO: get next lookup
     }
     return;
   }
   // MSG TYPE
-  if (node->num_tries < 2) {
+  if (node->num_tries < 2 || (node->num_tries >= RE_0 && node->num_tries < RE_2)) {
     node->num_tries++;
     unsigned long pkt_len = 14 + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
     char pkt[pkt_len];
@@ -340,11 +374,16 @@ void send_msg(send_node_t *node) {
     strcat(pkt, " MSG ");
     strcat(pkt, node->msg);
     send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
+  } else if (node->num_tries == 3) {
+    // Do nothing. We wait for possible new lookup.
+  } else {
+    // Discard and see if more queued. Otherwise set to ready for transmission.
   }
 }
 
 void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
-  if (cmp_addr_port(incoming, server) == 1) return; // Ignore server ACKs
+  char server_ack = 0;
+  if (cmp_addr_port(incoming, server) == 1) server_ack = 1;
 
   char *msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || ((strcmp(msg_part, "0") != 0) && strcmp(msg_part, "1") != 0)) {
@@ -356,8 +395,25 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
   strcpy(pkt_num, msg_part);
 
   msg_part = strtok(NULL, msg_delim);
-  if (msg_part == NULL || (strcmp(msg_part, "FROM") != 0)) {
-    send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+  if (msg_part == NULL) {return;}
+  if (strcmp(msg_part, "OK") == 0) {
+    ack_node(incoming, "OK");
+  } else if (strcmp(msg_part, "WRONG") == 0) {
+    msg_part = strtok(NULL, msg_delim);
+    if (msg_part == NULL) {return;}
+    if (strcmp(msg_part, "NAME") == 0) {
+      // TODO: What happens with these
+      return;
+    }
+    if (strcmp(msg_part, "FORMAT") == 0) {
+      // TODO: What happens with these
+      return;
+    }
+  } else if (strcmp(msg_part, "NICK") == 0) {
+
+  } else if (strcmp(msg_part, "NOT") == 0) {
+
+  } else {
     return;
   }
 }
