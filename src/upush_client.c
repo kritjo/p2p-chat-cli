@@ -410,9 +410,9 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       return;
     }
   } else if (strcmp(msg_part, "NICK") == 0) {
-
+    // Get the nick, the IP and the port and insert to cache. Check if there are any dependency nodes that we should "wake"
   } else if (strcmp(msg_part, "NOT") == 0) {
-
+    // Find the lookup node that failed, print error and continue with next if there are any
   } else {
     return;
   }
