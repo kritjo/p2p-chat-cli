@@ -10,7 +10,7 @@
 #include <string.h>
 
 #include "send_packet.h"
-#include "nick_node.h"
+#include "nick_node_server.h"
 #include "network_utils.h"
 
 #define MAX_MSG 1460 // Longest msg can be 20 char + 2*nicklen + message

@@ -9,7 +9,8 @@
 #include "upush_client.h"
 #include "send_packet.h"
 #include "network_utils.h"
-#include "real_time.h"
+#include "nick_node_client.h"
+#include "send_node.h"
 
 #define MAX_MSG 1460
 
@@ -19,14 +20,16 @@ typedef struct recv_node {
     struct recv_node *next;
 } recv_node_t;
 
-
-void handle_sig_usr1(int _1, siginfo_t * siginfo, void * _2);
+void handle_sig_alarm(int sig);
 recv_node_t *find_or_insert_recv_node(char *nick);
 recv_node_t *find_recv_node(char *nick);
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming);
 void handle_heartbeat();
 
 void handle_ack(char *msg_delim, struct sockaddr_storage incoming);
+void free_recv_nodes(void);
+
+void send_msg(send_node_t *node);
 
 static int socketfd;
 static char *heartbeat_msg;
@@ -37,16 +40,6 @@ static char *my_nick;
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
   long timeout;
-
-  struct sigaction action;
-  memset(&action, 0, sizeof(action));
-  action.sa_sigaction = &handle_sig_usr1;
-  action.sa_flags = SA_SIGINFO;
-
-  if (sigaction(SIGUSR1, &action, NULL) != 0) {
-    perror("sigaction");
-    return 0;
-  }
 
   if (argc == 6) {
     my_nick = argv[1];
@@ -137,15 +130,8 @@ int main(int argc, char **argv) {
   freeaddrinfo(server_res);
 
   send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &server, get_addr_len(server));
-  usr1_sigval_t *reg_timer = malloc(sizeof(usr1_sigval_t));
-  if (reg_timer == 0) {
-    fprintf(stderr, "malloc() failed in main()\n");
-    return EXIT_FAILURE;
-  }
-  if (register_usr1_custom_sig(REG, reg_timer, timeout, 0) == 0) {
-    fprintf(stderr, "register_usr1_custom_sig() failed in main()\n");
-    return EXIT_FAILURE;
-  }
+  signal(SIGALRM, handle_sig_alarm);
+  alarm(timeout);
 
   while (1) {
     ssize_t bytes_received;
@@ -165,7 +151,6 @@ int main(int argc, char **argv) {
     if (bytes_received < 0) {
       // -1 is error, and we should quit the client.
       perror("recvfrom");
-      unregister_usr_1_custom_sig(reg_timer);
       exit(EXIT_FAILURE);
     }
     // Then check if the msg we got comes from the server.
@@ -179,78 +164,51 @@ int main(int argc, char **argv) {
       continue;
     }
     // Got correct ACK cancel alarm.
-    unregister_usr_1_custom_sig(reg_timer);
+    alarm(0);
+    signal(SIGALRM, SIG_DFL);
     break;
   }
 
-  // We are now registered with the server and should start sending heartbeats every 10 seconds
-  usr1_sigval_t *heartbeat_timer = malloc(sizeof(usr1_sigval_t));
-  if (heartbeat_timer == 0) {
-    fprintf(stderr, "malloc() failed in main()\n");
-    return(EXIT_FAILURE);
-  }
-  if (register_usr1_custom_sig(HEARTBEAT, heartbeat_timer, 10, 10) == 0) {
-    fprintf(stderr, "register_usr1_custom_sig() failed in main()\n");
-    return EXIT_FAILURE;
-  }
+  int heartbeatfd = timerfd_create(CLOCK_REALTIME, 0);
+  struct itimerspec timespec;
+  memset(&timespec, 0, sizeof (timespec));
+  timespec.it_value.tv_sec = 10;
+  timespec.it_interval.tv_sec = 10;
+  timerfd_settime(heartbeatfd, 0, &timespec, NULL);
+
+  int timeoutfd = timerfd_create(CLOCK_REALTIME, 0);
+  memset(&timespec, 0, sizeof (timespec));
+  timespec.it_value.tv_sec = timeout;
+  timespec.it_interval.tv_sec = timeout;
+  timerfd_settime(timeoutfd, 0, &timespec, NULL);
 
   char buf[MAX_MSG + 1];
   ssize_t bytes_received;
   socklen_t addrlen = sizeof(struct sockaddr_storage);
   struct sockaddr_storage incoming;
-  int heartbeatfd = timerfd_create(CLOCK_REALTIME, 0);
   while (1) {
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(STDIN_FILENO, &fds);
     FD_SET(socketfd, &fds);
-
-    // Disarm the global timer and replace with FD timer, while select is blocking. Uses this instead of timeout
-    // as it uses the same time structures, so we can ensure that it runs every 10 sec precisely.
-    struct itimerspec zero_time;
-    memset(&zero_time, 0, sizeof (zero_time));
-    struct itimerspec time_left;
-    memset(&time_left, 0, sizeof(time_left));
-    if (timer_settime(heartbeat_timer->timer, 0, &zero_time, &time_left) != 0) {
-      perror("timer_settime");
-      return EXIT_FAILURE;
-    }
-
-    timerfd_settime(heartbeatfd, 0, &time_left, NULL);
     FD_SET(heartbeatfd, &fds);
+    FD_SET(timeoutfd, &fds);
 
     if ((select(FD_SETSIZE, &fds, NULL, NULL, 0)) == -1) {
       perror("select");
       break;
     }
 
-    // Now we are not blocking anymore and can restart the global timer, as multiple calls inside the loop can block
-    memset(&zero_time, 0, sizeof (zero_time));
-    memset(&time_left, 0, sizeof(time_left));
-    timerfd_settime(heartbeatfd, 0, &zero_time, &time_left);
-    timer_settime(heartbeat_timer->timer, 0, &time_left, NULL);
-
     if (FD_ISSET(heartbeatfd, &fds)) {
+      uint64_t ign;
+      read(heartbeatfd, &ign, sizeof(uint64_t));
       handle_heartbeat();
     }
 
-    if (FD_ISSET(STDIN_FILENO, &fds)) {
-      // Got message from STDIN
-      int c, count;
-      count = 0;
-      while ((c = getchar()) != EOF && c != '\n') {
-        if (isascii(c)) {
-          buf[count++] = (char) c;
-        }
-      }
-      buf[count] = '\0';
-      if (strcmp(buf, "QUIT") == 0) {
-        unregister_usr_1_custom_sig(heartbeat_timer);
-        free(heartbeat_msg);
-        close(socketfd);
-        close(heartbeatfd);
-        return EXIT_SUCCESS;
-      }
+    if (FD_ISSET(timeoutfd, &fds)) {
+      uint64_t ign;
+      read(heartbeatfd, &ign, sizeof(uint64_t));
+      // TODO: Handle timeout
     }
 
     if (FD_ISSET(socketfd, &fds)) {
@@ -292,13 +250,97 @@ int main(int argc, char **argv) {
         continue;
       }
     }
+
+    if (FD_ISSET(STDIN_FILENO, &fds)) {
+      int c;
+      int count = 0;
+      while((c = getchar()) != EOF && c != '\n' && count < 1421) {
+        if (isascii(c)) {
+          buf[count++] = (char) c;
+        }
+      }
+      buf[count] = '\0';
+
+      if (strcmp(buf, "QUIT") == 0) {
+        free(heartbeat_msg);
+        close(socketfd);
+        close(heartbeatfd);
+        free_recv_nodes();
+        return EXIT_SUCCESS;
+      }
+
+      if (buf[0] != '@') {
+        continue; //TODO: maybe something else?
+      }
+
+      int startmsg = 0;
+      char nick[21];
+      while (startmsg < 21) {
+        if (buf[startmsg] == ' ') break;
+        nick[startmsg] = buf[startmsg];
+        startmsg++;
+      }
+      nick[startmsg] = '\0';
+
+      if (buf[startmsg] != ' ' || startmsg == 0) {
+        continue; // Illegal nick if it does not end with ' ' or is zero-length
+      }
+      nick_node_t *search_result = find_nick_node(nick);
+      if (search_result == NULL) {
+        // Lookup
+        continue;
+      }
+
+      // Add message to back of msg queue
+      char *new_msg = malloc(strlen(&buf[startmsg+1])+1);
+      strcpy(new_msg, &buf[startmsg+1]);
+      add_msg(search_result, new_msg);
+
+      // If client is available to send, add client to send_node and send msg
+      if (search_result->available_to_send == 1) {
+        send_node_t *new_node = malloc(sizeof(send_node_t));
+        new_node->nick_node = search_result;
+        new_node->pkt_num = search_result->next_pkt_num;
+        new_node->msg = new_msg;
+        new_node->num_tries = 0;
+        insert_send_node(new_node);
+        send_msg(new_node);
+      }
+    }
   }
 
-  unregister_usr_1_custom_sig(heartbeat_timer);
   free(heartbeat_msg);
   close(socketfd);
   close(heartbeatfd);
+  free_recv_nodes();
   return EXIT_FAILURE;
+}
+
+void send_msg(send_node_t *node) {
+  if (strcmp(node->nick_node->nick, "_ SERVER _") == 0) {
+    // LOOKUP TYPE
+    if (node->num_tries < 2) {
+
+    } else {
+      printf("NICK %s NOT REACHABLE\n", node->msg)
+    }
+    return;
+  }
+  // MSG TYPE
+  if (node->num_tries < 2) {
+    node->num_tries++;
+    unsigned long pkt_len = 14 + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
+    char pkt[pkt_len];
+    strcpy(pkt, "PKT ");
+    strcat(pkt, node->pkt_num);
+    strcat(pkt, " FROM ");
+    strcat(pkt, my_nick);
+    strcat(pkt, " TO ");
+    strcat(pkt, node->nick_node->nick);
+    strcat(pkt, " MSG ");
+    strcat(pkt, node->msg);
+    send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
+  }
 }
 
 void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
@@ -367,6 +409,13 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, my_nick) != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG NAME");
+    // Illegal datagrams is expected so this is not an error.
+    return;
+  }
+
+  msg_part = strtok(NULL, msg_delim);
+  if (msg_part == NULL || (strcmp(msg_part, "MSG") != 0)) {
+    send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
     // Illegal datagrams is expected so this is not an error.
     return;
   }
@@ -443,19 +492,7 @@ void handle_heartbeat() {
   send_packet(socketfd, heartbeat_msg, strlen(heartbeat_msg)+1, 0, (struct sockaddr *) &server, get_addr_len(server));
 }
 
-void handle_sig_usr1(int _1, siginfo_t * siginfo, void * _2) {
-  usr1_sigval_t *info = (usr1_sigval_t *) siginfo->si_value.sival_ptr;
-  switch (info->type) {
-    case REG:
-      printf("Timeout. Did not get ACK from server on registration.\n");
-      unregister_usr_1_custom_sig(info);
-      exit(EXIT_SUCCESS); // This is not an error in the program.
-    case HEARTBEAT:
-      printf("OK\n");
-      handle_heartbeat();
-      break;
-    default:
-      fprintf(stderr, "Illegal USR1 signal caught.\n");
-      exit(EXIT_FAILURE);
-  }
+void handle_sig_alarm(int sig) {
+  printf("Timeout. Did not get ACK from server on registration.\n");
+  exit(EXIT_SUCCESS); // This is not an error in the program.
 }

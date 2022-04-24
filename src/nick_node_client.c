@@ -1,4 +1,4 @@
-#include "nick_node.h"
+#include "nick_node_client.h"
 
 static nick_node_t *firstNick = 0;
 static int num_nick_nodes = 0;
@@ -45,7 +45,13 @@ nick_node_t *find_nick_node(char *key) {
 }
 
 void free_nick_node(nick_node_t *node) {
-  free(node->registered_time);
+  message_node_t *curr = node->msg_to_send;
+  while (curr != NULL) {
+    free(curr->message);
+    message_node_t *tmp = curr;
+    curr = curr->next;
+    free(tmp);
+  }
   free(node->addr);
   free(node->nick);
   free(node);
@@ -60,18 +66,35 @@ void delete_all_nick_nodes(void) {
   }
 }
 
-void delete_old_nick_nodes(void) {
-  nick_node_t *current = firstNick;
-  while (current != 0) {
-    time_t current_time;
-    time(&current_time);
-
-    nick_node_t *nxt = current->next;
-
-    if (current_time - *current->registered_time > TIMEOUT) {
-      delete_nick_node(current);
-    }
-
-    current = nxt;
+void add_msg(nick_node_t *node, char *msg) {
+  message_node_t *new_message = malloc(sizeof(message_node_t));
+  new_message->message = msg;
+  if (node->msg_to_send == NULL) {
+    node->msg_to_send = new_message;
+    return;
   }
+  message_node_t *curr = node->msg_to_send;
+  while (curr->next != NULL) curr = curr->next;
+  curr->next = new_message;
+}
+
+char *pop_msg(nick_node_t *node) {
+  char *msg = node->msg_to_send->message;
+  node->msg_to_send = node->msg_to_send->next;
+  return msg;
+}
+
+nick_node_t server;
+
+void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting) {
+  lookup_node_t *new_lookup = malloc(sizeof(message_node_t));
+  new_lookup->nick = nick;
+  new_lookup->waiting_node = waiting;
+  if (node->lookup_node == NULL) {
+    node->lookup_node = new_lookup;
+    return;
+  }
+  lookup_node_t *curr = node->lookup_node;
+  while (curr->next != NULL) curr = (lookup_node_t *) curr->next;
+  curr->next = (struct nick_node_client *) new_lookup;
 }
