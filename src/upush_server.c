@@ -273,12 +273,14 @@ int main(int argc, char **argv) {
       }
       char addr_str[INET6_ADDRSTRLEN];
       char port_str[7];
+      get_addr(*result_node->addr, (char *) &addr_str, INET6_ADDRSTRLEN);
+      get_port(*result_node->addr, (char *) port_str);
       if (send_ack(socketfd, incoming,pkt_num, 5,
                "NICK",
                nick,
-               get_addr(incoming, (char *) &addr_str, INET6_ADDRSTRLEN),
+               addr_str,
                "PORT",
-               get_port(incoming, (char *) port_str)) == (size_t) -1) {
+               port_str) == (size_t) -1) {
         fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
       }
     }
