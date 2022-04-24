@@ -24,8 +24,6 @@ void handle_exit(void);
 
 void handle_sig_terminate(int sig);
 
-int get_bound_socket(struct addrinfo hints, char *name, char *service);
-
 void print_illegal_dram(struct sockaddr_storage addr);
 
 #pragma GCC diagnostic push
@@ -33,7 +31,7 @@ void print_illegal_dram(struct sockaddr_storage addr);
 void handle_sig_ignore(int sig) {}
 #pragma GCC diagnostic pop
 
-int socketfd = 0;
+static int socketfd = 0;
 
 int main(int argc, char **argv) {
   char *port, loss_probability;
@@ -57,10 +55,11 @@ int main(int argc, char **argv) {
     // TODO: change <= to < on release
     if (0 <= tmp && tmp <= 100) {
       loss_probability = (char) tmp;
+      set_loss_probability((float) loss_probability / 100.0f);
     } else {
       printf("Illegal loss probability. Enter a number between 0 and 100.\n");
       handle_exit();
-      EXIT_SUCCESS; // Return success as this is not an error case, but expected with wrong
+      return EXIT_SUCCESS; // Return success as this is not an error case, but expected with wrong num
     }
   } else {
     printf("USAGE: %s <port> <loss_probability>\n", argv[0]);
@@ -68,14 +67,14 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS; // Return success as this is not an error, but expected without args.
   }
 
-  set_loss_probability((float) loss_probability / 100.0f);
 
-  // Make the addrinfo struct ready
+  // Make the addrinfo struct ready. Do not use SO_REUSEADDR as the server should give error msg on port in use.
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_DGRAM;
-  hints.ai_flags = AI_PASSIVE;
+  hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV; // Fill out my ip for me, and explicitly specify that service arg is
+                                                // a port number. This is done for added rigidity.
   socketfd = get_bound_socket(hints, NULL, port);
   if (socketfd == -1) {
     fprintf(stderr, "get_bound_socket() in main() failed.\n");
@@ -176,11 +175,14 @@ int main(int argc, char **argv) {
     }
 
     // Remove newline from the nickname (if there is one)
-    char nick[nick_len];
+    char nick[nick_len+1];
     if (msg_part[nick_len - 1] == '\n') {
       strncpy(nick, msg_part, nick_len - 1);
       nick[nick_len - 1] = '\0';
       nick_len--;
+    } else {
+      strcpy(nick, msg_part);
+      nick[nick_len] = '\0';
     }
 
     char legal_nick = 1;
@@ -293,45 +295,6 @@ void print_illegal_dram(struct sockaddr_storage addr) {
   printf("Recived illegal datagram from: %s:%s\n", addr_str, port_str);
 }
 
-int get_bound_socket(struct addrinfo hints, char* name, char *service) {
-  int rc; // Return code
-  struct addrinfo *res, *curr_res;
-  int curr_socket;
-  if ((rc = getaddrinfo(name, service, &hints, &res)) != 0) {
-    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rc));
-    handle_exit();
-    return -1;
-  }
-
-  // The resulting addrinfo struct res could have multiple Internet adresses
-  // bind to the first valid
-  for (curr_res = res; curr_res != NULL; curr_res = curr_res->ai_next) {
-    if ((curr_socket = socket(
-        curr_res->ai_family,
-        curr_res->ai_socktype,
-        curr_res->ai_protocol)
-        ) == -1) {
-      perror("socket");
-      fprintf(stderr, "Could not aquire socket, trying next result.\n");
-      continue; // If socket return error, try next.
-    }
-
-    if (bind(curr_socket, curr_res->ai_addr, curr_res->ai_addrlen) != -1)
-      break; // Bound socket, exit loop.
-
-    perror("bind");
-    fprintf(stderr, "Could not bind socket, trying next result.\n");
-    close(curr_socket);
-  }
-
-  freeaddrinfo(res);
-
-  if (curr_res == NULL) {
-    return -1;
-  }
-  return curr_socket;
-}
-
 size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) {
   va_list args;
   va_start(args, num_args);
@@ -356,11 +319,6 @@ size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) 
     strcat(msg, args_each[n]);
     n++;
   }
-
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = addr.ss_family;
-  hints.ai_socktype = SOCK_DGRAM;
 
   return send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &addr, get_addr_len(addr));
 }

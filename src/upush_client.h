@@ -1,0 +1,4 @@
+#ifndef SRC_UPUSH_CLIENT_H
+#define SRC_UPUSH_CLIENT_H
+
+#endif //SRC_UPUSH_CLIENT_H

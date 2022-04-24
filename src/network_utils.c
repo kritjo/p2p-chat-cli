@@ -1,5 +1,17 @@
 #include "network_utils.h"
 
+int cmp_addr_port(struct sockaddr_storage first, struct sockaddr_storage second) {
+  char first_buf_addr[INET6_ADDRSTRLEN];
+  char first_buf_port[7];
+  char second_buf_addr[INET6_ADDRSTRLEN];
+  char second_buf_port[7];
+  get_addr(first, first_buf_addr, INET6_ADDRSTRLEN);
+  get_port(first, first_buf_port);
+  get_addr(second, second_buf_addr, INET6_ADDRSTRLEN);
+  get_port(second, second_buf_port);
+  return (strcmp(first_buf_addr, second_buf_addr) == 0 && strcmp(first_buf_port, second_buf_port) == 0) ? 1 : -1;
+}
+
 char *get_addr(struct sockaddr_storage addr, char *buf, size_t buflen) {
   if (addr.ss_family == AF_INET) {
     inet_ntop(addr.ss_family, &((struct sockaddr_in*) &addr)->sin_addr, buf, buflen);
@@ -26,4 +38,42 @@ char *get_port(struct sockaddr_storage addr, char *buf) {
   }
   sprintf(buf, "%hu", port);
   return buf;
+}
+
+int get_bound_socket(struct addrinfo hints, char* name, char *service) {
+  int rc; // Return code
+  struct addrinfo *res, *curr_res;
+  int curr_socket;
+  if ((rc = getaddrinfo(name, service, &hints, &res)) != 0) {
+    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rc));
+    return -1;
+  }
+
+  // The resulting addrinfo struct res could have multiple Internet adresses
+  // bind to the first valid
+  for (curr_res = res; curr_res != NULL; curr_res = curr_res->ai_next) {
+    if ((curr_socket = socket(
+        curr_res->ai_family,
+        curr_res->ai_socktype,
+        curr_res->ai_protocol)
+        ) == -1) {
+      perror("socket");
+      fprintf(stderr, "Could not aquire socket, trying next result.\n");
+      continue; // If socket return error, try next.
+    }
+
+    if (bind(curr_socket, curr_res->ai_addr, curr_res->ai_addrlen) != -1)
+      break; // Bound socket, exit loop.
+
+    perror("bind");
+    fprintf(stderr, "Could not bind socket, trying next result.\n");
+    close(curr_socket);
+  }
+
+  freeaddrinfo(res);
+
+  if (curr_res == NULL) {
+    return -1;
+  }
+  return curr_socket;
 }
