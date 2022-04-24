@@ -18,8 +18,6 @@
                      // Assume that pkt num is 0 or 1.
                      // Nicklen is max 20 char
 
-size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...);
-
 void handle_exit(void);
 
 void handle_sig_terminate(int sig);
@@ -235,7 +233,7 @@ int main(int argc, char **argv) {
         }
 
         // Registration completed send ACK
-        if (send_ack(incoming, pkt_num, 1, "OK") == (size_t) -1) {
+        if (send_ack(socketfd, incoming, pkt_num, 1, "OK") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
       } else {
@@ -251,14 +249,14 @@ int main(int argc, char **argv) {
           handle_exit();
           exit(EXIT_FAILURE);
         }
-        if (send_ack(incoming, pkt_num, 1, "OK") == (size_t) -1) {
+        if (send_ack(socketfd, incoming, pkt_num, 1, "OK") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
       }
     } else {
       // We can be certain that we are now in lookup phase due to the binary possibilities of the conditional variable.
       if (result_node == NULL) {
-        if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
+        if (send_ack(socketfd, incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
         continue;
@@ -268,14 +266,14 @@ int main(int argc, char **argv) {
       time(&current_time);
 
       if (current_time - *result_node->registered_time > TIMEOUT) {
-        if (send_ack(incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
+        if (send_ack(socketfd, incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
         continue;
       }
       char addr_str[INET6_ADDRSTRLEN];
       char port_str[7];
-      if (send_ack(incoming,pkt_num, 5,
+      if (send_ack(socketfd, incoming,pkt_num, 5,
                "NICK",
                nick,
                get_addr(incoming, (char *) &addr_str, INET6_ADDRSTRLEN),
@@ -293,34 +291,6 @@ void print_illegal_dram(struct sockaddr_storage addr) {
   get_addr(addr, addr_str, INET6_ADDRSTRLEN);
   get_port(addr, port_str);
   printf("Recived illegal datagram from: %s:%s\n", addr_str, port_str);
-}
-
-size_t send_ack(struct sockaddr_storage addr, char *pkt_num, int num_args, ...) {
-  va_list args;
-  va_start(args, num_args);
-
-  char **args_each = alloca(num_args * sizeof(char *));
-
-  // Get total message length
-  size_t msg_len = 6; // "ACK 0"
-  int n = num_args;
-  while (n) {
-    msg_len += 1; // Leading space
-    args_each[num_args - n] = va_arg(args, char *);
-    msg_len += strlen(args_each[num_args - n]);
-    n--;
-  }
-
-  char msg[msg_len];
-  strcpy(msg, "ACK ");
-  strcat(msg, pkt_num);
-  while (n < num_args) {
-    strcat(msg, " ");
-    strcat(msg, args_each[n]);
-    n++;
-  }
-
-  return send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &addr, get_addr_len(addr));
 }
 
 #pragma GCC diagnostic push

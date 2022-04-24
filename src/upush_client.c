@@ -4,6 +4,7 @@
 #include <time.h>
 #include <limits.h>
 #include <ctype.h>
+#include <errno.h>
 
 #include "upush_client.h"
 #include "send_packet.h"
@@ -16,27 +17,47 @@ enum USR1_TYPE {
     HEARTBEAT,
 };
 
-void handle_sig_usr1(int sig, siginfo_t * siginfo, void * _);
-timer_t *register_usr1_custom_sig(enum USR1_TYPE type, time_t timeout, time_t interval);
+typedef struct {
+    enum USR1_TYPE type;
+    timer_t *timer;
+} usr1_sigval_t;
+
+typedef struct recv_node {
+    char *nick;
+    char *expected_msg;
+    struct recv_node *next;
+} recv_node_t;
+
+
+void handle_sig_usr1(int _1, siginfo_t * siginfo, void * _2);
+usr1_sigval_t *register_usr1_custom_sig(enum USR1_TYPE type, usr1_sigval_t *info, time_t timeout, time_t interval);
+void unregister_usr_1_custom_sig(usr1_sigval_t *info);
+recv_node_t *find_or_insert_recv_node(char *nick);
+recv_node_t *find_recv_node(char *nick);
+void handle_pkt(char *msg_delim, struct sockaddr_storage incoming);
+
+void handle_ack(char *msg_delim, struct sockaddr_storage incoming);
 
 static int socketfd;
 static char *heartbeat_msg;
 static struct sockaddr_storage server;
+static recv_node_t *first_recv_node = NULL;
+static char *my_nick;
 
 int main(int argc, char **argv) {
-  char *nick, *server_addr, *server_port, loss_probability;
+  char *server_addr, *server_port, loss_probability;
   long timeout;
 
   if (argc == 6) {
-    nick = argv[1];
+    my_nick = argv[1];
 
     // Check that the nick is legal. That is: only ascii characters and only alpha characters. Max len 20 char
-    size_t nick_len = strlen(nick);
+    size_t nick_len = strlen(my_nick);
     char legal_nick = 1;
     if (20 < nick_len) legal_nick = 0;
     else {
       for (size_t i = 0; i < nick_len; i++) {
-        if (!isascii(nick[i]) || !isalpha(nick[i]) || isdigit(nick[i])) {
+        if (!isascii(my_nick[i]) || !isalpha(my_nick[i]) || isdigit(my_nick[i])) {
           legal_nick = 0;
         }
       }
@@ -86,12 +107,16 @@ int main(int argc, char **argv) {
   }
 
   // Make reg message
-  size_t msg_len = 11 + strlen(nick);
+  size_t msg_len = 11 + strlen(my_nick);
   char msg[msg_len];
   strcpy(msg, "PKT 0 REG ");
-  strcat(msg, nick);
+  strcat(msg, my_nick);
   // Save it to be used in heartbeat msg
   heartbeat_msg = malloc(msg_len * sizeof(char));
+  if (heartbeat_msg == NULL) {
+    fprintf(stderr, "malloc() failed in main()\n");
+    exit(EXIT_FAILURE);
+  }
   strcpy(heartbeat_msg, msg);
 
   struct addrinfo server_hints, *server_res;
@@ -106,13 +131,24 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  server = *(struct sockaddr_storage *) server_res->ai_addr;
+  // Convert result to sockaddr_storage in server
+  memset(&server, 0, sizeof(server));
+  memcpy(&server, server_res->ai_addr, server_res->ai_addrlen);
   freeaddrinfo(server_res);
+
   send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &server, get_addr_len(server));
-  timer_t *reg_timer = register_usr1_custom_sig(REG, timeout, 0);
+  usr1_sigval_t *reg_timer = malloc(sizeof(usr1_sigval_t));
+  if (reg_timer == 0) {
+    fprintf(stderr, "malloc() failed in main()\n");
+    return(EXIT_FAILURE);
+  }
+  if (register_usr1_custom_sig(REG, reg_timer, timeout, 0) == 0) {
+    fprintf(stderr, "register_usr1_custom_sig() failed in main()\n");
+    return EXIT_FAILURE;
+  }
 
   while (1) {
-    ssize_t bytes_received = 0;
+    ssize_t bytes_received;
     struct sockaddr_storage incoming;
     char buf[MAX_MSG];
     socklen_t addrlen = sizeof(struct sockaddr_storage);
@@ -129,6 +165,7 @@ int main(int argc, char **argv) {
     if (bytes_received < 0) {
       // -1 is error, and we should quit the client.
       perror("recvfrom");
+      unregister_usr_1_custom_sig(reg_timer);
       exit(EXIT_FAILURE);
     }
     // Then check if the msg we got comes from the server.
@@ -142,24 +179,211 @@ int main(int argc, char **argv) {
       continue;
     }
     // Got correct ACK cancel alarm.
-    timer_delete(reg_timer);
-    printf("Got ACK from server: %s\n", buf);
+    unregister_usr_1_custom_sig(reg_timer);
     break;
   }
+
   // We are now registered with the server and should start sending heartbeats every 10 seconds
-  register_usr1_custom_sig(HEARTBEAT, 10, 10);
-  while(1);
+  usr1_sigval_t *heartbeat_timer = malloc(sizeof(usr1_sigval_t));
+  if (heartbeat_timer == 0) {
+    fprintf(stderr, "malloc() failed in main()\n");
+    return(EXIT_FAILURE);
+  }
+  if (register_usr1_custom_sig(HEARTBEAT, heartbeat_timer, 10, 10) == 0) {
+    fprintf(stderr, "register_usr1_custom_sig() failed in main()\n");
+    return EXIT_FAILURE;
+  }
+
+  char buf[MAX_MSG + 1];
+  ssize_t bytes_received;
+  socklen_t addrlen = sizeof(struct sockaddr_storage);
+  struct sockaddr_storage incoming;
+  while (1) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    FD_SET(socketfd, &fds);
+
+    if ((select(FD_SETSIZE, &fds, NULL, NULL, NULL)) == -1) {
+      perror("select");
+      break;
+    }
+
+    if (FD_ISSET(STDIN_FILENO, &fds)) {
+      // Got message from STDIN
+    }
+
+    if (FD_ISSET(socketfd, &fds)) {
+      // Got message from socket
+      bytes_received = recvfrom(
+          socketfd,
+          (void *) buf,
+          MAX_MSG,
+          0,
+          (struct sockaddr *) &incoming, // Store the origin adr of incoming dgram
+          &addrlen
+      );
+      buf[bytes_received] = '\0';
+
+      if (bytes_received < 0) {
+        // -1 is error, and we should quit the server.
+        perror("recvfrom");
+        break;
+      } else if (bytes_received == 0) {
+        // Zero length datagrams are allowed and not error.
+        continue;
+      }
+
+      char *msg_delim = " ";
+
+      // Get first part of msg, should be "PKT"
+      char *msg_part = strtok(buf, msg_delim);
+
+      // On all checks, we test if msg_part is NULL first as strcmp declares that the parameters should not be null
+      if (msg_part == NULL) {
+        // Illegal datagrams is expected so this is not an error.
+        continue;
+      } else if (strcmp(msg_part, "PKT") == 0) {
+        handle_pkt(msg_delim, incoming);
+      } else if (strcmp(msg_part, "ACK") == 0) {
+        handle_ack(msg_delim, incoming);
+      } else {
+        // Illegal datagrams is expected so this is not an error.
+        continue;
+      }
+    }
+  }
+
+  unregister_usr_1_custom_sig(heartbeat_timer);
   return 1;
 }
 
-timer_t *register_usr1_custom_sig(enum USR1_TYPE type, time_t timeout, time_t interval) {
+void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
+  if (cmp_addr_port(incoming, server) == 1) return; // Ignore server ACKs
+
+  char *msg_part = strtok(NULL, msg_delim);
+  if (msg_part == NULL || ((strcmp(msg_part, "0") != 0) && strcmp(msg_part, "1") != 0)) {
+    // Illegal datagrams is expected so this is not an error.
+    return;
+  }
+
+  char pkt_num[2];
+  strcpy(pkt_num, msg_part);
+
+  msg_part = strtok(NULL, msg_delim);
+  if (msg_part == NULL || (strcmp(msg_part, "FROM") != 0)) {
+    send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    return;
+  }
+}
+
+void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
+  char *msg_part = strtok(NULL, msg_delim);
+  if (msg_part == NULL || ((strcmp(msg_part, "0") != 0) && strcmp(msg_part, "1") != 0)) {
+    // Illegal datagrams is expected so this is not an error.
+    return;
+  }
+
+  char pkt_num[2];
+  strcpy(pkt_num, msg_part);
+
+  msg_part = strtok(NULL, msg_delim);
+  if (msg_part == NULL || (strcmp(msg_part, "FROM") != 0)) {
+    send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    return;
+  }
+
+  msg_part = strtok(NULL, msg_delim);
+  size_t nick_len = strlen(msg_part);
+  if (msg_part == NULL || nick_len < 1 || nick_len > 20) {
+    send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    return;
+  }
+
+  char nick[nick_len+1];
+  strcpy(nick, msg_part);
+  char legal_nick = 1;
+  // Check that the nick is legal. That is: only ascii characters and only alpha characters.
+  for (size_t i = 0; i < nick_len; i++) {
+    if (!isascii(nick[i]) || !isalpha(nick[i]) || isdigit(nick[i])) {
+      legal_nick = 0;
+    }
+  }
+  if (!legal_nick) {
+    send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    return;
+  }
+
+  msg_part = strtok(NULL, msg_delim);
+  if (msg_part == NULL || (strcmp(msg_part, my_nick) != 0)) {
+    send_ack(socketfd, incoming, pkt_num, 1, "WRONG NAME");
+    // Illegal datagrams is expected so this is not an error.
+    return;
+  }
+
+  msg_part = strtok(NULL, msg_delim);
+  if (msg_part == NULL || 1400 < strlen(msg_part)) {
+    // Illegal datagrams is expected so this is not an error.
+    return;
+  }
+
+  recv_node_t *recv_node = find_or_insert_recv_node(nick);
+  send_ack(socketfd, incoming, pkt_num, 1, "OK");
+  if (pkt_num == recv_node->expected_msg) {
+    printf("%s: %s\n", nick, msg_part);
+  }
+}
+
+void unregister_usr_1_custom_sig(usr1_sigval_t *info) {
+  timer_delete(info->timer);
+  free(info->timer);
+  free(info);
+}
+
+recv_node_t *find_recv_node(char *nick) {
+  recv_node_t *curr = first_recv_node;
+  while(curr != NULL) {
+    if (strcmp(curr->nick, nick) == 0) {
+      return curr;
+    }
+    curr = curr->next;
+  }
+  return NULL;
+}
+
+recv_node_t *find_or_insert_recv_node(char *nick) {
+  recv_node_t *curr = find_recv_node(nick);
+  if (curr != NULL) return curr;
+  if (first_recv_node == NULL) {
+    first_recv_node = malloc(sizeof(recv_node_t));
+    first_recv_node->nick = nick;
+    first_recv_node->expected_msg = "0";
+    first_recv_node->next = NULL;
+    return first_recv_node;
+  }
+  curr = malloc(sizeof(recv_node_t));
+  curr->nick = nick;
+  curr->expected_msg = "0";
+  curr->next = first_recv_node;
+  first_recv_node = curr;
+  return curr;
+}
+
+usr1_sigval_t *register_usr1_custom_sig(enum USR1_TYPE type, usr1_sigval_t *info, time_t timeout, time_t interval) {
   timer_t *timer = malloc(sizeof(*timer));
+  if (timer == NULL) {
+    fprintf(stderr, "malloc() failed in register_usr1_custom_sig()\n");
+    return 0;
+  }
 
   sigevent_t event;
   memset(&event, 0, sizeof(event));
   event.sigev_notify = SIGEV_SIGNAL;
   event.sigev_signo = SIGUSR1;
-  event.sigev_value.sival_int = type;
+
+  info->timer = timer;
+  info->type = type;
+  event.sigev_value.sival_ptr = info;
 
   struct sigaction action;
   memset(&action, 0, sizeof(action));
@@ -167,12 +391,14 @@ timer_t *register_usr1_custom_sig(enum USR1_TYPE type, time_t timeout, time_t in
   action.sa_flags = SA_SIGINFO;
   if (sigaction(SIGUSR1, &action, NULL) != 0) {
     perror("sigaction");
-    exit(EXIT_FAILURE);
+    free(timer);
+    return 0;
   }
 
   if (timer_create(CLOCK_REALTIME, &event, timer) == -1) {
     perror("timer_create");
-    exit(EXIT_FAILURE);
+    free(timer);
+    return 0;
   }
 
   struct itimerspec timespec;
@@ -181,18 +407,21 @@ timer_t *register_usr1_custom_sig(enum USR1_TYPE type, time_t timeout, time_t in
   timespec.it_interval.tv_sec = interval;
   if (timer_settime(*timer, 0, &timespec, NULL) == -1) {
     perror("timer_settime()");
-    exit(EXIT_FAILURE);
+    free(timer);
+    return 0;
   }
+  return info;
 }
 
 void handle_sig_usr1(int _1, siginfo_t * siginfo, void * _2) {
-  switch (siginfo->si_value.sival_int) {
+  usr1_sigval_t *info = (usr1_sigval_t *) siginfo->si_value.sival_ptr;
+  switch (info->type) {
     case REG:
       printf("Timeout. Did not get ACK from server on registration.\n");
+      unregister_usr_1_custom_sig(info);
       exit(EXIT_SUCCESS); // This is not an error in the program.
     case HEARTBEAT:
       send_packet(socketfd, heartbeat_msg, strlen(heartbeat_msg)+1, 0, (struct sockaddr *) &server, get_addr_len(server));
-      printf("SENDING HEARTBEAT!\n");
       break;
     default:
       fprintf(stderr, "Illegal USR1 signal caught.\n");

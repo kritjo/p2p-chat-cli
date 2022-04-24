@@ -20,4 +20,6 @@ socklen_t get_addr_len(struct sockaddr_storage addr);
 
 int get_bound_socket(struct addrinfo hints, char *name, char *service);
 
+size_t send_ack(int socketfd, struct sockaddr_storage addr, char *pkt_num, int num_args, ...);
+
 #endif //SRC_NETWORK_UTILS_H

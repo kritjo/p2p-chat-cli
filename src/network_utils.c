@@ -1,4 +1,6 @@
+#include <stdarg.h>
 #include "network_utils.h"
+#include "send_packet.h"
 
 int cmp_addr_port(struct sockaddr_storage first, struct sockaddr_storage second) {
   char first_buf_addr[INET6_ADDRSTRLEN];
@@ -76,4 +78,32 @@ int get_bound_socket(struct addrinfo hints, char* name, char *service) {
     return -1;
   }
   return curr_socket;
+}
+
+size_t send_ack(int socketfd, struct sockaddr_storage addr, char *pkt_num, int num_args, ...) {
+  va_list args;
+  va_start(args, num_args);
+
+  char **args_each = alloca(num_args * sizeof(char *));
+
+  // Get total message length
+  size_t msg_len = 6; // "ACK 0"
+  int n = num_args;
+  while (n) {
+    msg_len += 1; // Leading space
+    args_each[num_args - n] = va_arg(args, char *);
+    msg_len += strlen(args_each[num_args - n]);
+    n--;
+  }
+
+  char msg[msg_len];
+  strcpy(msg, "ACK ");
+  strcat(msg, pkt_num);
+  while (n < num_args) {
+    strcat(msg, " ");
+    strcat(msg, args_each[n]);
+    n++;
+  }
+
+  return send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &addr, get_addr_len(addr));
 }
