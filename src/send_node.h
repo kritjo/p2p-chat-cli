@@ -3,6 +3,9 @@
 
 #include "nick_node_client.h"
 
+#define WAIT_INIT -1
+#define DO_NEW_LOOKUP 3
+#define WAIT_FOR_LOOKUP 4
 #define RE_0 10
 #define RE_1 11
 #define RE_2 12

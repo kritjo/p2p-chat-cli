@@ -20,7 +20,7 @@ typedef struct message_node {
 typedef struct lookup_node {
     char *nick;
     struct nick_node_client *waiting_node;
-    struct nick_node_client *next;
+    struct lookup_node *next;
 } lookup_node_t;
 
 typedef struct nick_node_client {
@@ -50,5 +50,9 @@ void delete_all_nick_nodes(void);
 void add_msg(nick_node_t *node, char *msg);
 
 void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting_node);
+
+char *pop_msg(nick_node_t *node);
+
+lookup_node_t *pop_lookup(nick_node_t *node);
 
 #endif //SRC_NICK_NODE_CLIENT_H

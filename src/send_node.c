@@ -1,6 +1,6 @@
 #include "send_node.h"
 
-static send_node_t *first_node = 0;
+static send_node_t *first_node = NULL;
 
 int insert_send_node(send_node_t *node) {
   if (first_node == NULL) {
@@ -29,8 +29,10 @@ void delete_send_node(send_node_t *node) {
   }
 }
 
+// key == NULL returns first
 send_node_t *find_send_node(char *key) {
   send_node_t *curr = first_node;
+  if (key == NULL) return curr;
   while(curr != NULL) {
     if (strcmp(curr->nick_node->nick, key) == 0) return curr;
     curr = curr->next;

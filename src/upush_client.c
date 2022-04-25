@@ -214,7 +214,7 @@ int main(int argc, char **argv) {
 
     if (FD_ISSET(timeoutfd, &fds)) {
       uint64_t ign;
-      read(heartbeatfd, &ign, sizeof(uint64_t));
+      read(timeoutfd, &ign, sizeof(uint64_t));
       // TODO: Handle timeout
     }
 
@@ -292,19 +292,34 @@ int main(int argc, char **argv) {
       if (buf[startmsg] != ' ' || startmsg == 0) {
         continue; // Illegal nick if it does not end with ' ' or is zero-length
       }
-      nick_node_t *search_result = find_nick_node(nick);
+
+      char *new_msg = malloc(strlen(&buf[startmsg+1])+1);
+      strcpy(new_msg, &buf[startmsg+1]);
+
+      nick_node_t *search_result = find_nick_node(&nick[1]);
       if (search_result == NULL) {
         // Lookup
         // Add message to back of msg queue
         char *nick_persistant = malloc(sizeof(startmsg));
-        strcpy(nick_persistant, nick);
+        strcpy(nick_persistant, &nick[1]);
         add_lookup(&server_node, nick_persistant, NULL);
+
+        nick_node_t *new_nick_node = malloc(sizeof(nick_node_t));
+        new_nick_node->nick = &nick[1];
+
+        send_node_t *new_send_node = malloc(sizeof(send_node_t));
+        new_send_node->nick_node = new_nick_node;
+        new_send_node->pkt_num = "0";
+        new_send_node->msg = new_msg;
+        new_send_node->num_tries = WAIT_INIT;
+        new_send_node->type = MSG;
+        insert_send_node(new_send_node);
 
         // If client is available to send, add client to send_node and send msg
         if (server_node.available_to_send == 1) {
           server_node.available_to_send = 0;
           send_node_t *new_node = malloc(sizeof(send_node_t));
-          new_node->nick_node = &server_node;
+          new_node->nick_node = NULL;
           new_node->pkt_num = server_node.next_pkt_num;
           new_node->msg = nick_persistant;
           new_node->type = LOOKUP;
@@ -315,9 +330,7 @@ int main(int argc, char **argv) {
         continue;
       }
 
-      // Add message to back of msg queue
-      char *new_msg = malloc(strlen(&buf[startmsg+1])+1);
-      strcpy(new_msg, &buf[startmsg+1]);
+      // Add msg to back of queue
       add_msg(search_result, new_msg);
 
       // If client is available to send, add client to send_node and send msg
@@ -347,13 +360,13 @@ void send_msg(send_node_t *node) {
     // LOOKUP TYPE
     if (node->num_tries < 2) {
       node->num_tries++;
-      unsigned long pkt_len = 12 + strlen(node->msg);
+      unsigned long pkt_len = 13 + strlen(node->msg) + 1;
       char pkt[pkt_len];
       strcpy(pkt, "PKT ");
       strcat(pkt, node->pkt_num);
       strcat(pkt, " LOOKUP ");
-      strcat(pkt, node->nick_node->nick);
-      send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
+      strcat(pkt, node->msg);
+      send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) &server, get_addr_len(server));
     } else {
       printf("NICK %s NOT REACHABLE\n", node->msg);
       //TODO: get next lookup
@@ -363,7 +376,7 @@ void send_msg(send_node_t *node) {
   // MSG TYPE
   if (node->num_tries < 2 || (node->num_tries >= RE_0 && node->num_tries < RE_2)) {
     node->num_tries++;
-    unsigned long pkt_len = 14 + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
+    unsigned long pkt_len = 21 + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
     char pkt[pkt_len];
     strcpy(pkt, "PKT ");
     strcat(pkt, node->pkt_num);
@@ -374,10 +387,26 @@ void send_msg(send_node_t *node) {
     strcat(pkt, " MSG ");
     strcat(pkt, node->msg);
     send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
-  } else if (node->num_tries == 3) {
-    // Do nothing. We wait for possible new lookup.
-  } else {
-    // Discard and see if more queued. Otherwise set to ready for transmission.
+  } else if (node->num_tries == DO_NEW_LOOKUP) {
+    // Do new lookup.
+  } else if (node->num_tries == WAIT_FOR_LOOKUP) {
+    // Do nothing.
+  }
+  else {
+    if (server_node.lookup_node == NULL) {
+      delete_send_node(node);
+      server_node.available_to_send = 1;
+      return;
+    }
+
+    node->num_tries = 0;
+    node->pkt_num = server_node.next_pkt_num;
+    lookup_node_t *popped = pop_lookup(node->nick_node);
+    node->msg = popped->nick;
+    node->nick_node = popped->waiting_node;
+    server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "0") == 0 ? "1" : "0";
+
+    return;
   }
 }
 
@@ -396,8 +425,33 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL) {return;}
-  if (strcmp(msg_part, "OK") == 0) {
-    ack_node(incoming, "OK");
+    if (strcmp(msg_part, "OK") == 0) {
+    if (server_ack == 1) return; // Ignore registration OK
+
+    send_node_t *curr = find_send_node(NULL);
+    while(curr != NULL) {
+      if (curr->type == MSG && cmp_addr_port(*curr->nick_node->addr, incoming) == 1) {
+        break;
+      }
+      curr = curr->next;
+    }
+    if (curr == NULL) {
+      fprintf(stderr, "Could not find lookup node to ack\n");
+      return;
+    }
+
+    if (curr->nick_node->msg_to_send == NULL) {
+      curr->nick_node->available_to_send = 1;
+      delete_send_node(curr);
+      return;
+    }
+
+    curr->pkt_num = curr->nick_node->next_pkt_num;
+    curr->num_tries = 0;
+    curr->msg = pop_msg(curr->nick_node);
+    curr->nick_node->next_pkt_num = strcmp(curr->pkt_num, "1") == 0 ? "0" : "1";
+    return;
+
   } else if (strcmp(msg_part, "WRONG") == 0) {
     msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL) {return;}
@@ -411,6 +465,141 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
     }
   } else if (strcmp(msg_part, "NICK") == 0) {
     // Get the nick, the IP and the port and insert to cache. Check if there are any dependency nodes that we should "wake"
+    send_node_t *curr = find_send_node(NULL);
+    while(curr != NULL) {
+      if (curr->type == LOOKUP) {
+        break;
+      }
+      curr = curr->next;
+    }
+    if (curr == NULL) {
+      fprintf(stderr, "Could not find lookup node to ack\n");
+      return;
+    }
+    if (strcmp(curr->pkt_num, pkt_num) != 0) {
+      return; // Discard wrong ACK.
+    }
+    // Get nick
+    msg_part = strtok(NULL, msg_delim);
+    if (strcmp(msg_part, curr->msg) != 0) {
+      return; // Discard wrong NICK.
+    }
+    char *nick = malloc((strlen(msg_part) + 1) * sizeof(char));
+    strcpy(nick, msg_part);
+
+    // Get addr
+    msg_part = strtok(NULL, msg_delim);
+    struct sockaddr_storage addr;
+    memset(&addr, 0, sizeof(struct sockaddr_storage));
+    if (strchr(msg_part, ':')) {
+      char tmp_addr[INET6_ADDRSTRLEN];
+      strcpy(tmp_addr, msg_part);
+
+      // Get port
+      msg_part = strtok(NULL, msg_delim);
+      if (strcmp(msg_part, "PORT") != 0) return;
+      msg_part = strtok(NULL, msg_delim);
+
+      struct addrinfo hints, *res;
+      memset(&hints, 0, sizeof(hints));
+      hints.ai_family = AF_INET6;
+      hints.ai_socktype = SOCK_DGRAM;
+      hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+
+      int rc;
+      if ((rc = getaddrinfo(tmp_addr, msg_part, &hints, &res)) != 0) {
+        fprintf(stderr, "Got illegal address/port: %s.\n", gai_strerror(rc));
+        return;
+      }
+
+      addr.ss_family = AF_INET6;
+      memcpy(&addr, res->ai_addr, res->ai_addrlen);
+    } else {
+      char tmp_addr[INET_ADDRSTRLEN];
+      strcpy(tmp_addr, msg_part);
+
+      // Get port
+      msg_part = strtok(NULL, msg_delim);
+      if (strcmp(msg_part, "PORT") != 0) return;
+      msg_part = strtok(NULL, msg_delim);
+
+      struct addrinfo hints, *res;
+      memset(&hints, 0, sizeof(hints));
+      hints.ai_family = AF_INET;
+      hints.ai_socktype = SOCK_DGRAM;
+      hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+
+      int rc;
+      if ((rc = getaddrinfo(tmp_addr, msg_part, &hints, &res)) != 0) {
+        fprintf(stderr, "Got illegal address/port: %s.\n", gai_strerror(rc));
+        return;
+      }
+
+      addr.ss_family = AF_INET;
+      memcpy(&addr, res->ai_addr, res->ai_addrlen);
+    }
+
+    // If this is new LOOKUP for existing cache
+    if (curr->nick_node != NULL) {
+      nick_node_t *new_node = curr->nick_node;
+      *new_node->addr = addr;
+      new_node->type = CLIENT;
+      new_node->available_to_send = 1;
+
+      send_node_t *notify = find_send_node(NULL);
+      while(notify != NULL) {
+        if (curr->nick_node == notify->nick_node) {
+          break;
+        }
+        notify = notify->next;
+      }
+      if (notify == NULL) {
+        fprintf(stderr, "Could not find expected notify node.\n");
+        return;
+      }
+      notify->num_tries = RE_0;
+      send_msg(notify);
+    } else {
+      send_node_t *curr_n = find_send_node(NULL);
+      while (curr_n != NULL) {
+        if (curr_n->type == MSG && strcmp(curr_n->nick_node->nick, nick) == 0) {
+          break;
+        }
+        curr_n = curr_n->next;
+      }
+      if (curr_n == NULL) {
+        fprintf(stderr, "Could not find expected notify node.\n");
+        return;
+      }
+      nick_node_t *new_node = curr_n->nick_node;
+      new_node->addr = malloc(sizeof(struct sockaddr_storage));
+      *new_node->addr = addr;
+      new_node->type = CLIENT;
+      new_node->available_to_send = 0;
+      new_node->msg_to_send = NULL;
+      new_node->next_pkt_num = "1";
+      insert_nick_node(new_node);
+
+      curr_n->num_tries = 0;
+      curr_n->pkt_num = "0";
+      send_msg(curr_n);
+    }
+
+    if (server_node.lookup_node == NULL) {
+      delete_send_node(curr);
+      server_node.available_to_send = 1;
+      return;
+    }
+
+    curr->num_tries = 0;
+    curr->pkt_num = server_node.next_pkt_num;
+    lookup_node_t *popped = pop_lookup(&server_node);
+    curr->msg = popped->nick;
+    curr->nick_node = popped->waiting_node;
+    server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "0") == 0 ? "1" : "0";
+
+    return;
+
   } else if (strcmp(msg_part, "NOT") == 0) {
     // Find the lookup node that failed, print error and continue with next if there are any
   } else {

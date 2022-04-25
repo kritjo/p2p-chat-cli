@@ -8,6 +8,8 @@ int insert_nick_node(nick_node_t *node) {
 
   if (firstNick == NULL) {
     firstNick = node;
+    node->prev = NULL;
+    node->next = NULL;
     num_nick_nodes++;
     return 1;
   }
@@ -84,6 +86,12 @@ char *pop_msg(nick_node_t *node) {
   return msg;
 }
 
+lookup_node_t *pop_lookup(nick_node_t *node) {
+  lookup_node_t *popped = node->lookup_node;
+  node->lookup_node = node->lookup_node->next;
+  return popped;
+}
+
 void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting) {
   lookup_node_t *new_lookup = malloc(sizeof(message_node_t));
   new_lookup->nick = nick;
@@ -94,5 +102,5 @@ void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting) {
   }
   lookup_node_t *curr = node->lookup_node;
   while (curr->next != NULL) curr = (lookup_node_t *) curr->next;
-  curr->next = (struct nick_node_client *) new_lookup;
+  curr->next = new_lookup;
 }
