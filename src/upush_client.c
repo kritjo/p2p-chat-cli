@@ -273,6 +273,8 @@ int main(int argc, char **argv) {
         close(socketfd);
         close(heartbeatfd);
         free_recv_nodes();
+        delete_all_nick_nodes();
+        delete_all_send_nodes();
         return EXIT_SUCCESS;
       }
 
@@ -304,7 +306,7 @@ int main(int argc, char **argv) {
         strcpy(nick_persistant, nick);
 
         nick_node_t *new_nick_node = malloc(sizeof(nick_node_t));
-        new_nick_node->nick = nick;
+        new_nick_node->nick = nick_persistant;
         new_nick_node->msg_to_send = NULL;
 
         send_node_t *new_send_node = malloc(sizeof(send_node_t));
@@ -380,7 +382,7 @@ void send_msg(send_node_t *node) {
     return;
   }
   // MSG TYPE
-  if (node->num_tries < 2 || (node->num_tries >= RE_0 && node->num_tries < RE_2)) {
+  if ((node->num_tries >= 0 && node->num_tries < 2) || (node->num_tries >= RE_0 && node->num_tries < RE_2)) {
     node->num_tries++;
     unsigned long pkt_len = 21 + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
     char pkt[pkt_len];
@@ -395,19 +397,21 @@ void send_msg(send_node_t *node) {
     send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
   } else if (node->num_tries == DO_NEW_LOOKUP) {
     // Do new lookup.
-  } else if (node->num_tries == WAIT_FOR_LOOKUP) {
+  } else if (node->num_tries == WAIT_FOR_LOOKUP || node->num_tries == WAIT_INIT) {
     // Do nothing.
-  }
-  else {
-    if (server_node.lookup_node == NULL) {
+  } else {
+    // Discard msg and get next if any.
+    if (node->nick_node->msg_to_send == NULL) {
+      free(node->msg);
       delete_send_node(node);
-      server_node.available_to_send = 1;
+      node->nick_node->available_to_send = 1;
       return;
     }
 
     node->num_tries = 0;
     node->pkt_num = server_node.next_pkt_num;
     lookup_node_t *popped = pop_lookup(node->nick_node);
+    free(node->msg);
     node->msg = popped->nick;
     node->nick_node = popped->waiting_node;
     free(popped);
@@ -432,7 +436,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL) {return;}
-    if (strcmp(msg_part, "OK") == 0) {
+  if (strcmp(msg_part, "OK") == 0) {
     if (server_ack == 1) return; // Ignore registration OK
 
     send_node_t *curr = find_send_node(NULL);
@@ -449,6 +453,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
     if (curr->nick_node->msg_to_send == NULL) {
       curr->nick_node->available_to_send = 1;
+      free(curr->msg);
       delete_send_node(curr);
       return;
     }
@@ -747,8 +752,8 @@ void free_recv_nodes(void) {
   recv_node_t *tmp;
   while (curr != NULL) {
     tmp = curr;
-    free(tmp);
     curr = curr->next;
+    free(tmp);
   }
 }
 

@@ -50,6 +50,7 @@ void delete_all_send_nodes(void) {
   send_node_t *current = first_node;
   while (current != 0) {
     send_node_t *nxt = current->next;
+    free(current->msg);
     delete_send_node(current);
     current = nxt;
   }
