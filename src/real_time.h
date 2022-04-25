@@ -7,12 +7,12 @@
 
 typedef struct usr1_sigval{
     timer_t timer;
-    unsigned long pkt_num_for_timer;
+    char do_not_honour;
     struct send_node *timed_out_send_node;
 } usr1_sigval_t;
 
 int register_usr1_custom_sig(usr1_sigval_t *info);
-int set_time_usr1_timer(usr1_sigval_t *info, long pkt_timer, time_t timeout);
+int set_time_usr1_timer(usr1_sigval_t *info, time_t timeout);
 void unregister_usr_1_custom_sig(usr1_sigval_t *info);
 
 #endif //SRC_REAL_TIME_H

@@ -20,8 +20,7 @@ int register_usr1_custom_sig(usr1_sigval_t *info) {
 
 }
 
-int set_time_usr1_timer(usr1_sigval_t *info, long pkt_timer, time_t timeout) {
-  info->pkt_num_for_timer = pkt_timer;
+int set_time_usr1_timer(usr1_sigval_t *info, time_t timeout) {
   struct itimerspec timespec;
   memset(&timespec, 0, sizeof(timespec));
   timespec.it_value.tv_sec = timeout;

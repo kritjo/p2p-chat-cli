@@ -218,7 +218,9 @@ int main(int argc, char **argv) {
       struct signalfd_siginfo info;
       read(timeoutfd, &info, sizeof(struct signalfd_siginfo));
       usr1_sigval_t *signal_ptr = (usr1_sigval_t *) info.ssi_ptr;
-      printf("OK\n");
+      if (signal_ptr->do_not_honour == 0) {
+        send_msg(signal_ptr->timed_out_send_node);
+      }
     }
 
     if (FD_ISSET(socketfd, &fds)) {
@@ -384,7 +386,8 @@ void send_msg(send_node_t *node) {
       strcat(pkt, " LOOKUP ");
       strcat(pkt, node->msg);
       send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) &server, get_addr_len(server));
-      set_time_usr1_timer(node->timeout_timer, node->pkt_num, timeout);
+      set_time_usr1_timer(node->timeout_timer, timeout);
+      node->timeout_timer->do_not_honour = 0;
     } else {
       printf("NICK %s NOT REACHABLE\n", node->msg);
       //TODO: get next lookup
@@ -405,7 +408,8 @@ void send_msg(send_node_t *node) {
     strcat(pkt, " MSG ");
     strcat(pkt, node->msg);
     send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
-    set_time_usr1_timer(node->timeout_timer, node->pkt_num, timeout);
+    set_time_usr1_timer(node->timeout_timer, timeout);
+    node->timeout_timer->do_not_honour = 0;
   } else if (node->num_tries == DO_NEW_LOOKUP) {
     // Do new lookup.
   } else if (node->num_tries == WAIT_FOR_LOOKUP || node->num_tries == WAIT_INIT) {
@@ -462,7 +466,8 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       return;
     }
 
-    set_time_usr1_timer(curr->timeout_timer, pkt_num, 0);
+    set_time_usr1_timer(curr->timeout_timer, 0);
+    curr->timeout_timer->do_not_honour = 1;
 
     if (curr->nick_node->msg_to_send == NULL) {
       curr->nick_node->available_to_send = 1;
@@ -510,7 +515,8 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
     if (strcmp(msg_part, curr->msg) != 0) {
       return; // Discard wrong NICK.
     }
-    set_time_usr1_timer(curr->timeout_timer, pkt_num, 0);
+    set_time_usr1_timer(curr->timeout_timer, 0);
+    curr->timeout_timer->do_not_honour = 1;
 
     char *nick = malloc((strlen(msg_part) + 1) * sizeof(char));
     strcpy(nick, msg_part);
@@ -615,7 +621,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       new_node->type = CLIENT;
       new_node->available_to_send = 0;
       new_node->msg_to_send = NULL;
-      new_node->next_pkt_num = 1;
+      new_node->next_pkt_num = "1";
       insert_nick_node(new_node);
 
       curr_n->num_tries = 0;
