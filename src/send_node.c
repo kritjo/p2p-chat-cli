@@ -5,6 +5,8 @@ static send_node_t *first_node = NULL;
 int insert_send_node(send_node_t *node) {
   if (first_node == NULL) {
     first_node = node;
+    first_node->next = NULL;
+    first_node->prev = NULL;
     return 1;
   }
 

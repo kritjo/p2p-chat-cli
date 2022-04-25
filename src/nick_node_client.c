@@ -71,6 +71,7 @@ void delete_all_nick_nodes(void) {
 void add_msg(nick_node_t *node, char *msg) {
   message_node_t *new_message = malloc(sizeof(message_node_t));
   new_message->message = msg;
+  new_message->next = NULL;
   if (node->msg_to_send == NULL) {
     node->msg_to_send = new_message;
     return;
@@ -82,7 +83,9 @@ void add_msg(nick_node_t *node, char *msg) {
 
 char *pop_msg(nick_node_t *node) {
   char *msg = node->msg_to_send->message;
+  message_node_t *tmp = node->msg_to_send;
   node->msg_to_send = node->msg_to_send->next;
+  free (tmp);
   return msg;
 }
 
@@ -93,14 +96,15 @@ lookup_node_t *pop_lookup(nick_node_t *node) {
 }
 
 void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting) {
-  lookup_node_t *new_lookup = malloc(sizeof(message_node_t));
+  lookup_node_t *new_lookup = malloc(sizeof(lookup_node_t));
   new_lookup->nick = nick;
   new_lookup->waiting_node = waiting;
+  new_lookup->next = NULL;
   if (node->lookup_node == NULL) {
     node->lookup_node = new_lookup;
     return;
   }
   lookup_node_t *curr = node->lookup_node;
-  while (curr->next != NULL) curr = (lookup_node_t *) curr->next;
+  while (curr->next != NULL) curr = curr->next;
   curr->next = new_lookup;
 }

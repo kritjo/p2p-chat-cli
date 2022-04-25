@@ -280,32 +280,32 @@ int main(int argc, char **argv) {
         continue; //TODO: maybe something else?
       }
 
-      int startmsg = 0;
+      int startmsg = 1;
       char nick[21];
-      while (startmsg < 21) {
+      while (startmsg < 22) {
         if (buf[startmsg] == ' ') break;
-        nick[startmsg] = buf[startmsg];
+        nick[startmsg-1] = buf[startmsg];
         startmsg++;
       }
-      nick[startmsg] = '\0';
+      nick[startmsg-1] = '\0';
 
-      if (buf[startmsg] != ' ' || startmsg == 0) {
+      if (buf[startmsg] != ' ' || startmsg == 1) {
         continue; // Illegal nick if it does not end with ' ' or is zero-length
       }
 
-      char *new_msg = malloc(strlen(&buf[startmsg+1])+1);
+      char *new_msg = malloc(strlen(&buf[startmsg+1])+1 * sizeof(char));
       strcpy(new_msg, &buf[startmsg+1]);
 
-      nick_node_t *search_result = find_nick_node(&nick[1]);
+      nick_node_t *search_result = find_nick_node(nick);
       if (search_result == NULL) {
         // Lookup
         // Add message to back of msg queue
-        char *nick_persistant = malloc(sizeof(startmsg));
-        strcpy(nick_persistant, &nick[1]);
-        add_lookup(&server_node, nick_persistant, NULL);
+        char *nick_persistant = malloc(startmsg * sizeof(char));
+        strcpy(nick_persistant, nick);
 
         nick_node_t *new_nick_node = malloc(sizeof(nick_node_t));
-        new_nick_node->nick = &nick[1];
+        new_nick_node->nick = nick;
+        new_nick_node->msg_to_send = NULL;
 
         send_node_t *new_send_node = malloc(sizeof(send_node_t));
         new_send_node->nick_node = new_nick_node;
@@ -319,13 +319,18 @@ int main(int argc, char **argv) {
         if (server_node.available_to_send == 1) {
           server_node.available_to_send = 0;
           send_node_t *new_node = malloc(sizeof(send_node_t));
+          new_node->next = NULL;
+          new_node->prev = NULL;
           new_node->nick_node = NULL;
           new_node->pkt_num = server_node.next_pkt_num;
+          server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "1") == 0 ? "0" : "1";
           new_node->msg = nick_persistant;
           new_node->type = LOOKUP;
           new_node->num_tries = 0;
           insert_send_node(new_node);
           send_msg(new_node);
+        } else {
+          add_lookup(&server_node, nick_persistant, NULL);
         }
         continue;
       }
@@ -339,7 +344,8 @@ int main(int argc, char **argv) {
         send_node_t *new_node = malloc(sizeof(send_node_t));
         new_node->nick_node = search_result;
         new_node->pkt_num = search_result->next_pkt_num;
-        new_node->msg = new_msg;
+        search_result->next_pkt_num = strcmp(search_result->next_pkt_num, "1") == 0 ? "0" : "1";
+        new_node->msg = pop_msg(search_result);
         new_node->num_tries = 0;
         new_node->type = MSG;
         insert_send_node(new_node);
@@ -404,6 +410,7 @@ void send_msg(send_node_t *node) {
     lookup_node_t *popped = pop_lookup(node->nick_node);
     node->msg = popped->nick;
     node->nick_node = popped->waiting_node;
+    free(popped);
     server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "0") == 0 ? "1" : "0";
 
     return;
@@ -448,6 +455,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
     curr->pkt_num = curr->nick_node->next_pkt_num;
     curr->num_tries = 0;
+    free(curr->msg);
     curr->msg = pop_msg(curr->nick_node);
     curr->nick_node->next_pkt_num = strcmp(curr->pkt_num, "1") == 0 ? "0" : "1";
     return;
@@ -497,7 +505,10 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
       // Get port
       msg_part = strtok(NULL, msg_delim);
-      if (strcmp(msg_part, "PORT") != 0) return;
+      if (strcmp(msg_part, "PORT") != 0) {
+        free(nick);
+        return;
+      }
       msg_part = strtok(NULL, msg_delim);
 
       struct addrinfo hints, *res;
@@ -509,6 +520,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       int rc;
       if ((rc = getaddrinfo(tmp_addr, msg_part, &hints, &res)) != 0) {
         fprintf(stderr, "Got illegal address/port: %s.\n", gai_strerror(rc));
+        free(nick);
         return;
       }
 
@@ -520,7 +532,10 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
       // Get port
       msg_part = strtok(NULL, msg_delim);
-      if (strcmp(msg_part, "PORT") != 0) return;
+      if (strcmp(msg_part, "PORT") != 0) {
+        free(nick);
+        return;
+      }
       msg_part = strtok(NULL, msg_delim);
 
       struct addrinfo hints, *res;
@@ -532,11 +547,13 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       int rc;
       if ((rc = getaddrinfo(tmp_addr, msg_part, &hints, &res)) != 0) {
         fprintf(stderr, "Got illegal address/port: %s.\n", gai_strerror(rc));
+        free(nick);
         return;
       }
 
       addr.ss_family = AF_INET;
       memcpy(&addr, res->ai_addr, res->ai_addrlen);
+      freeaddrinfo(res);
     }
 
     // If this is new LOOKUP for existing cache
@@ -563,6 +580,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       send_node_t *curr_n = find_send_node(NULL);
       while (curr_n != NULL) {
         if (curr_n->type == MSG && strcmp(curr_n->nick_node->nick, nick) == 0) {
+          free(nick);
           break;
         }
         curr_n = curr_n->next;
@@ -596,6 +614,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
     lookup_node_t *popped = pop_lookup(&server_node);
     curr->msg = popped->nick;
     curr->nick_node = popped->waiting_node;
+    free(popped);
     server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "0") == 0 ? "1" : "0";
 
     return;
