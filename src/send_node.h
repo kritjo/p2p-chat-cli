@@ -2,6 +2,7 @@
 #define SRC_SEND_NODE_H
 
 #include "nick_node_client.h"
+#include "real_time.h"
 
 #define WAIT_INIT -1
 #define DO_NEW_LOOKUP 3
@@ -18,6 +19,7 @@ typedef struct send_node {
     char *pkt_num;
     char num_tries;
     char *msg;
+    struct usr1_sigval *timeout_timer;
     struct send_node *next;
     struct send_node *prev;
 } send_node_t;

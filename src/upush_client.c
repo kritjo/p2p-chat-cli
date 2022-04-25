@@ -5,12 +5,14 @@
 #include <limits.h>
 #include <ctype.h>
 #include <sys/timerfd.h>
+#include <sys/signalfd.h>
 
 #include "upush_client.h"
 #include "send_packet.h"
 #include "network_utils.h"
 #include "nick_node_client.h"
 #include "send_node.h"
+#include "real_time.h"
 
 #define MAX_MSG 1460
 
@@ -37,10 +39,10 @@ static struct sockaddr_storage server;
 static recv_node_t *first_recv_node = NULL;
 static char *my_nick;
 static nick_node_t server_node;
+static long timeout;
 
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
-  long timeout;
 
   if (argc == 6) {
     my_nick = argv[1];
@@ -177,11 +179,11 @@ int main(int argc, char **argv) {
   timespec.it_interval.tv_sec = 10;
   timerfd_settime(heartbeatfd, 0, &timespec, NULL);
 
-  int timeoutfd = timerfd_create(CLOCK_REALTIME, 0);
-  memset(&timespec, 0, sizeof (timespec));
-  timespec.it_value.tv_sec = timeout;
-  timespec.it_interval.tv_sec = timeout;
-  timerfd_settime(timeoutfd, 0, &timespec, NULL);
+  sigset_t mask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGUSR1);
+  sigprocmask(SIG_BLOCK, &mask, NULL);
+  int timeoutfd = signalfd(-1, &mask, 0);
 
   server_node.type = SERVER;
   server_node.available_to_send = 1;
@@ -213,9 +215,10 @@ int main(int argc, char **argv) {
     }
 
     if (FD_ISSET(timeoutfd, &fds)) {
-      uint64_t ign;
-      read(timeoutfd, &ign, sizeof(uint64_t));
-      // TODO: Handle timeout
+      struct signalfd_siginfo info;
+      read(timeoutfd, &info, sizeof(struct signalfd_siginfo));
+      usr1_sigval_t *signal_ptr = (usr1_sigval_t *) info.ssi_ptr;
+      printf("OK\n");
     }
 
     if (FD_ISSET(socketfd, &fds)) {
@@ -315,6 +318,8 @@ int main(int argc, char **argv) {
         new_send_node->msg = new_msg;
         new_send_node->num_tries = WAIT_INIT;
         new_send_node->type = MSG;
+        new_send_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+        register_usr1_custom_sig(new_send_node->timeout_timer);
         insert_send_node(new_send_node);
 
         // If client is available to send, add client to send_node and send msg
@@ -329,6 +334,8 @@ int main(int argc, char **argv) {
           new_node->msg = nick_persistant;
           new_node->type = LOOKUP;
           new_node->num_tries = 0;
+          new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+          register_usr1_custom_sig(new_node->timeout_timer);
           insert_send_node(new_node);
           send_msg(new_node);
         } else {
@@ -350,6 +357,8 @@ int main(int argc, char **argv) {
         new_node->msg = pop_msg(search_result);
         new_node->num_tries = 0;
         new_node->type = MSG;
+        new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+        register_usr1_custom_sig(new_node->timeout_timer);
         insert_send_node(new_node);
         send_msg(new_node);
       }
@@ -375,6 +384,7 @@ void send_msg(send_node_t *node) {
       strcat(pkt, " LOOKUP ");
       strcat(pkt, node->msg);
       send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) &server, get_addr_len(server));
+      set_time_usr1_timer(node->timeout_timer, node->pkt_num, timeout);
     } else {
       printf("NICK %s NOT REACHABLE\n", node->msg);
       //TODO: get next lookup
@@ -395,6 +405,7 @@ void send_msg(send_node_t *node) {
     strcat(pkt, " MSG ");
     strcat(pkt, node->msg);
     send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
+    set_time_usr1_timer(node->timeout_timer, node->pkt_num, timeout);
   } else if (node->num_tries == DO_NEW_LOOKUP) {
     // Do new lookup.
   } else if (node->num_tries == WAIT_FOR_LOOKUP || node->num_tries == WAIT_INIT) {
@@ -451,6 +462,8 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       return;
     }
 
+    set_time_usr1_timer(curr->timeout_timer, pkt_num, 0);
+
     if (curr->nick_node->msg_to_send == NULL) {
       curr->nick_node->available_to_send = 1;
       free(curr->msg);
@@ -497,6 +510,8 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
     if (strcmp(msg_part, curr->msg) != 0) {
       return; // Discard wrong NICK.
     }
+    set_time_usr1_timer(curr->timeout_timer, pkt_num, 0);
+
     char *nick = malloc((strlen(msg_part) + 1) * sizeof(char));
     strcpy(nick, msg_part);
 
@@ -600,11 +615,11 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       new_node->type = CLIENT;
       new_node->available_to_send = 0;
       new_node->msg_to_send = NULL;
-      new_node->next_pkt_num = "1";
+      new_node->next_pkt_num = 1;
       insert_nick_node(new_node);
 
       curr_n->num_tries = 0;
-      curr_n->pkt_num = "0";
+      curr_n->pkt_num = 0;
       send_msg(curr_n);
     }
 
