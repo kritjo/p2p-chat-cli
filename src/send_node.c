@@ -13,6 +13,7 @@ int insert_send_node(send_node_t *node) {
   first_node->prev = node;
   node->next = first_node;
   first_node = node;
+  node->prev = NULL;
   return 1;
 }
 
@@ -36,13 +37,18 @@ send_node_t *find_send_node(char *key) {
   send_node_t *curr = first_node;
   if (key == NULL) return curr;
   while(curr != NULL) {
-    if (strcmp(curr->nick_node->nick, key) == 0) return curr;
+    if (curr->type == LOOKUP) {
+      if (strcmp(curr->msg, key) == 0) return curr;
+    } else if (strcmp(curr->nick_node->nick, key) == 0) {
+      return curr;
+    }
     curr = curr->next;
   }
   return NULL;
 }
 
 void free_send_node(send_node_t *node) {
+  free(node->timeout_timer);
   free(node);
 }
 

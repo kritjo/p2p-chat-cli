@@ -53,6 +53,7 @@ int main(int argc, char **argv) {
     // TODO: change <= to < on release
     if (0 <= tmp && tmp <= 100) {
       loss_probability = (char) tmp;
+      srand48(time(0)); // Seed the rand
       set_loss_probability((float) loss_probability / 100.0f);
     } else {
       printf("Illegal loss probability. Enter a number between 0 and 100.\n");

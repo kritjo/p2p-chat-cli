@@ -61,7 +61,7 @@ void free_nick_node(nick_node_t *node) {
 
 void delete_all_nick_nodes(void) {
   nick_node_t *current = firstNick;
-  while (current != 0) {
+  while (current != NULL) {
     nick_node_t *nxt = current->next;
     delete_nick_node(current);
     current = nxt;

@@ -33,6 +33,8 @@ void free_recv_nodes(void);
 
 void send_msg(send_node_t *node);
 
+void queue_lookup(nick_node_t *node, int i);
+
 static int socketfd;
 static char *heartbeat_msg;
 static struct sockaddr_storage server;
@@ -40,6 +42,13 @@ static recv_node_t *first_recv_node = NULL;
 static char *my_nick;
 static nick_node_t server_node;
 static long timeout;
+
+const char WAIT_INIT = -1;
+const char DO_NEW_LOOKUP = 2;
+const char WAIT_FOR_LOOKUP = 3;
+const char RE_0 = 10;
+const char RE_1 = 11;
+const char RE_2 = 12;
 
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
@@ -78,6 +87,7 @@ int main(int argc, char **argv) {
     // TODO: change <= to < on release
     if (0 <= tmp && tmp <= 100) {
       loss_probability = (char) tmp;
+      srand48(time(0)); // Seed the probability
       set_loss_probability((float) loss_probability / 100.0f);
     } else {
       printf("Illegal loss probability. Enter a number between 0 and 100.\n");
@@ -321,28 +331,11 @@ int main(int argc, char **argv) {
         new_send_node->num_tries = WAIT_INIT;
         new_send_node->type = MSG;
         new_send_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+        new_send_node->timeout_timer->timed_out_send_node = new_send_node;
         register_usr1_custom_sig(new_send_node->timeout_timer);
         insert_send_node(new_send_node);
 
-        // If client is available to send, add client to send_node and send msg
-        if (server_node.available_to_send == 1) {
-          server_node.available_to_send = 0;
-          send_node_t *new_node = malloc(sizeof(send_node_t));
-          new_node->next = NULL;
-          new_node->prev = NULL;
-          new_node->nick_node = NULL;
-          new_node->pkt_num = server_node.next_pkt_num;
-          server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "1") == 0 ? "0" : "1";
-          new_node->msg = nick_persistant;
-          new_node->type = LOOKUP;
-          new_node->num_tries = 0;
-          new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
-          register_usr1_custom_sig(new_node->timeout_timer);
-          insert_send_node(new_node);
-          send_msg(new_node);
-        } else {
-          add_lookup(&server_node, nick_persistant, NULL);
-        }
+        queue_lookup(new_nick_node, 0);
         continue;
       }
 
@@ -360,6 +353,7 @@ int main(int argc, char **argv) {
         new_node->num_tries = 0;
         new_node->type = MSG;
         new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+        new_node->timeout_timer->timed_out_send_node = new_node;
         register_usr1_custom_sig(new_node->timeout_timer);
         insert_send_node(new_node);
         send_msg(new_node);
@@ -372,6 +366,33 @@ int main(int argc, char **argv) {
   close(heartbeatfd);
   free_recv_nodes();
   return EXIT_FAILURE;
+}
+
+void queue_lookup(nick_node_t *node, int callback) {
+  // If client is available to send, add client to send_node and send msg
+  if (server_node.available_to_send == 1) {
+    server_node.available_to_send = 0;
+    send_node_t *new_node = malloc(sizeof(send_node_t));
+    new_node->next = NULL;
+    new_node->prev = NULL;
+    if (callback) {
+      new_node->nick_node = node;
+    } else {
+      new_node->nick_node = NULL;
+    }
+    new_node->pkt_num = server_node.next_pkt_num;
+    server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "1") == 0 ? "0" : "1";
+    new_node->msg = node->nick;
+    new_node->type = LOOKUP;
+    new_node->num_tries = 0;
+    new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+    new_node->timeout_timer->timed_out_send_node = new_node;
+    register_usr1_custom_sig(new_node->timeout_timer);
+    insert_send_node(new_node);
+    send_msg(new_node);
+  } else {
+    add_lookup(&server_node, node->nick, NULL);
+  }
 }
 
 void send_msg(send_node_t *node) {
@@ -390,6 +411,14 @@ void send_msg(send_node_t *node) {
       node->timeout_timer->do_not_honour = 0;
     } else {
       printf("NICK %s NOT REACHABLE\n", node->msg);
+      // Cleanup send and nick nodes
+      char nick[strlen(node->msg)];
+      strcpy(nick, node->msg);
+      send_node_t *search_send = find_send_node(nick);
+      delete_send_node(search_send);
+      nick_node_t *search = find_nick_node(nick);
+      if (search != NULL) delete_nick_node(search);
+      server_node.available_to_send = 1;
       //TODO: get next lookup
     }
     return;
@@ -411,15 +440,18 @@ void send_msg(send_node_t *node) {
     set_time_usr1_timer(node->timeout_timer, timeout);
     node->timeout_timer->do_not_honour = 0;
   } else if (node->num_tries == DO_NEW_LOOKUP) {
-    // Do new lookup.
+    node->num_tries = WAIT_FOR_LOOKUP;
+    queue_lookup(node->nick_node, 1);
+    printf("Doing new lookup\n");
+    return;
   } else if (node->num_tries == WAIT_FOR_LOOKUP || node->num_tries == WAIT_INIT) {
     // Do nothing.
   } else {
     // Discard msg and get next if any.
     if (node->nick_node->msg_to_send == NULL) {
+      node->nick_node->available_to_send = 1;
       free(node->msg);
       delete_send_node(node);
-      node->nick_node->available_to_send = 1;
       return;
     }
 
@@ -582,8 +614,10 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       freeaddrinfo(res);
     }
 
+    char should_delete = 1;
     // If this is new LOOKUP for existing cache
     if (curr->nick_node != NULL) {
+      should_delete = 0;
       nick_node_t *new_node = curr->nick_node;
       *new_node->addr = addr;
       new_node->type = CLIENT;
@@ -606,11 +640,11 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       send_node_t *curr_n = find_send_node(NULL);
       while (curr_n != NULL) {
         if (curr_n->type == MSG && strcmp(curr_n->nick_node->nick, nick) == 0) {
-          free(nick);
           break;
         }
         curr_n = curr_n->next;
       }
+      free(nick);
       if (curr_n == NULL) {
         fprintf(stderr, "Could not find expected notify node.\n");
         return;
@@ -625,12 +659,14 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       insert_nick_node(new_node);
 
       curr_n->num_tries = 0;
-      curr_n->pkt_num = 0;
+      curr_n->pkt_num = "0";
       send_msg(curr_n);
     }
 
     if (server_node.lookup_node == NULL) {
-      delete_send_node(curr);
+      if (should_delete == 1) {
+        delete_send_node(curr);
+      }
       server_node.available_to_send = 1;
       return;
     }
@@ -784,5 +820,6 @@ void handle_heartbeat() {
 
 void handle_sig_alarm(int sig) {
   printf("Timeout. Did not get ACK from server on registration.\n");
+  free(heartbeat_msg);
   exit(EXIT_SUCCESS); // This is not an error in the program.
 }
