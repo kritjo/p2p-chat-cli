@@ -414,8 +414,19 @@ void send_msg(send_node_t *node) {
       // Cleanup send and nick nodes
       char nick[strlen(node->msg)];
       strcpy(nick, node->msg);
-      send_node_t *search_send = find_send_node(nick);
-      delete_send_node(search_send);
+      for (int i = 0; i < 2; i++) { // Do twice to get both LOOKUP and possible MSG nodes
+        send_node_t *search_send = find_send_node(nick);
+        if (search_send != NULL && search_send->type == MSG && search_send->num_tries == -1) {
+          free(search_send->nick_node->nick);
+          free(search_send->nick_node);
+        }
+        if (search_send != NULL) {
+          if (search_send->type == MSG) {
+            free(search_send->msg);
+          }
+          delete_send_node(search_send);
+        }
+      }
       nick_node_t *search = find_nick_node(nick);
       if (search != NULL) delete_nick_node(search);
       server_node.available_to_send = 1;
@@ -617,6 +628,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
     char should_delete = 1;
     // If this is new LOOKUP for existing cache
     if (curr->nick_node != NULL) {
+      free(nick);
       should_delete = 0;
       nick_node_t *new_node = curr->nick_node;
       *new_node->addr = addr;
