@@ -48,6 +48,8 @@ send_node_t *find_send_node(char *key) {
 }
 
 void free_send_node(send_node_t *node) {
+  if (node->should_free_pkt_num) free(node->pkt_num);
+  unregister_usr_1_custom_sig(node->timeout_timer);
   free(node);
 }
 

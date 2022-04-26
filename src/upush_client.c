@@ -326,6 +326,7 @@ int main(int argc, char **argv) {
         new_nick_node->msg_to_send = NULL;
 
         send_node_t *new_send_node = malloc(sizeof(send_node_t));
+        new_send_node->should_free_pkt_num = 1;
         new_send_node->nick_node = new_nick_node;
         long time_s = time(0);
         char *long_buf = malloc(256 * sizeof(char));
@@ -350,6 +351,7 @@ int main(int argc, char **argv) {
       if (search_result->available_to_send == 1) {
         search_result->available_to_send = 0;
         send_node_t *new_node = malloc(sizeof(send_node_t));
+        new_node->should_free_pkt_num = 0;
         new_node->nick_node = search_result;
         new_node->pkt_num = search_result->next_pkt_num;
         search_result->next_pkt_num = strcmp(search_result->next_pkt_num, "1") == 0 ? "0" : "1";
@@ -377,6 +379,7 @@ void queue_lookup(nick_node_t *node, int callback) {
   if (server_node.available_to_send == 1) {
     server_node.available_to_send = 0;
     send_node_t *new_node = malloc(sizeof(send_node_t));
+    new_node->should_free_pkt_num = 0;
     new_node->next = NULL;
     new_node->prev = NULL;
     if (callback) {
