@@ -17,6 +17,7 @@ int insert_nick_node(nick_node_t *node) {
   firstNick->prev = node;
   node->next = firstNick;
   firstNick = node;
+  node->prev = NULL;
   num_nick_nodes++;
   return 1;
 }

@@ -48,7 +48,6 @@ send_node_t *find_send_node(char *key) {
 }
 
 void free_send_node(send_node_t *node) {
-  free(node->timeout_timer);
   free(node);
 }
 

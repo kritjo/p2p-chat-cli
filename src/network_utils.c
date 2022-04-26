@@ -87,7 +87,7 @@ size_t send_ack(int socketfd, struct sockaddr_storage addr, char *pkt_num, int n
   char **args_each = alloca(num_args * sizeof(char *));
 
   // Get total message length
-  size_t msg_len = 6; // "ACK 0"
+  size_t msg_len = 5 + strlen(pkt_num); // "ACK 0"
   int n = num_args;
   while (n) {
     msg_len += 1; // Leading space

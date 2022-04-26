@@ -19,6 +19,7 @@
 typedef struct recv_node {
     char *nick;
     char *expected_msg;
+    long stamp; // This is a timestamp (used on initial package). If updated version, reset expected_msg.
     struct recv_node *next;
 } recv_node_t;
 
@@ -326,7 +327,10 @@ int main(int argc, char **argv) {
 
         send_node_t *new_send_node = malloc(sizeof(send_node_t));
         new_send_node->nick_node = new_nick_node;
-        new_send_node->pkt_num = "0";
+        long time_s = time(0);
+        char *long_buf = malloc(256 * sizeof(char));
+        snprintf(long_buf, 256, "%ld", time_s);
+        new_send_node->pkt_num = long_buf;
         new_send_node->msg = new_msg;
         new_send_node->num_tries = WAIT_INIT;
         new_send_node->type = MSG;
@@ -400,7 +404,7 @@ void send_msg(send_node_t *node) {
     // LOOKUP TYPE
     if (node->num_tries < 2) {
       node->num_tries++;
-      unsigned long pkt_len = 13 + strlen(node->msg) + 1;
+      unsigned long pkt_len = 13  + strlen(node->msg) + 1;
       char pkt[pkt_len];
       strcpy(pkt, "PKT ");
       strcat(pkt, node->pkt_num);
@@ -437,7 +441,7 @@ void send_msg(send_node_t *node) {
   // MSG TYPE
   if ((node->num_tries >= 0 && node->num_tries < 2) || (node->num_tries >= RE_0 && node->num_tries < RE_2)) {
     node->num_tries++;
-    unsigned long pkt_len = 21 + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
+    unsigned long pkt_len = 20 + strlen(node->pkt_num) + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
     char pkt[pkt_len];
     strcpy(pkt, "PKT ");
     strcat(pkt, node->pkt_num);
@@ -484,12 +488,8 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
   if (cmp_addr_port(incoming, server) == 1) server_ack = 1;
 
   char *msg_part = strtok(NULL, msg_delim);
-  if (msg_part == NULL || ((strcmp(msg_part, "0") != 0) && strcmp(msg_part, "1") != 0)) {
-    // Illegal datagrams is expected so this is not an error.
-    return;
-  }
 
-  char pkt_num[2];
+  char pkt_num[256];
   strcpy(pkt_num, msg_part);
 
   msg_part = strtok(NULL, msg_delim);
@@ -671,7 +671,6 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
       insert_nick_node(new_node);
 
       curr_n->num_tries = 0;
-      curr_n->pkt_num = "0";
       send_msg(curr_n);
     }
 
@@ -702,12 +701,12 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   char *msg_part = strtok(NULL, msg_delim);
-  if (msg_part == NULL || ((strcmp(msg_part, "0") != 0) && strcmp(msg_part, "1") != 0)) {
+  if (msg_part == NULL) {
     // Illegal datagrams is expected so this is not an error.
     return;
   }
 
-  char pkt_num[2];
+  char pkt_num[256];
   strcpy(pkt_num, msg_part);
 
   msg_part = strtok(NULL, msg_delim);
@@ -766,18 +765,17 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
 
   recv_node_t *recv_node = find_or_insert_recv_node(nick);
 
-  // If this is the first ever message, check that pkt num is 0.
-  if (strcmp(recv_node->expected_msg, "-1") == 0) {
-    if (strcmp(pkt_num, "0") == 0) {
-      printf("%s: %s\n", nick, msg_part);
-      send_ack(socketfd, incoming, pkt_num, 1, "OK");
-      recv_node->expected_msg = "1";
-      return;
-    } else {
-      send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
-      return;
-    }
+  // If this is the first ever message or a new init msg, save stamp.
+  if (strcmp(pkt_num, "0") != 0 && strcmp(pkt_num, "1") != 0) {
+    recv_node->expected_msg = "1";
+    // TODO: Should probably check endptr
+    long new_stamp = strtol(pkt_num, NULL, 10);
+    if (recv_node->stamp != new_stamp) printf("%s: %s\n", nick, msg_part); // If this is not a retransmit
+    recv_node->stamp = new_stamp;
+    send_ack(socketfd, incoming, pkt_num, 1, "OK");
+    return;
   }
+
 
   // Send ack if this is previous message but only print if this is new msg.
   send_ack(socketfd, incoming, pkt_num, 1, "OK");
@@ -805,12 +803,14 @@ recv_node_t *find_or_insert_recv_node(char *nick) {
     first_recv_node = malloc(sizeof(recv_node_t));
     first_recv_node->nick = nick;
     first_recv_node->expected_msg = "-1";
+    first_recv_node->stamp = 0;
     first_recv_node->next = NULL;
     return first_recv_node;
   }
   curr = malloc(sizeof(recv_node_t));
   curr->nick = nick;
   curr->expected_msg = "-1";
+  first_recv_node->stamp = 0;
   curr->next = first_recv_node;
   first_recv_node = curr;
   return curr;
