@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <time.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -9,25 +8,10 @@
 #include <netdb.h>
 #include <string.h>
 
+#include "upush_server.h"
 #include "send_packet.h"
 #include "nick_node_server.h"
 #include "network_utils.h"
-
-#define MAX_MSG 1460 // Longest msg can be 20 char + 2*nicklen + message
-                     // Max message length is 1400.
-                     // Assume that pkt num is 0 or 1.
-                     // Nicklen is max 20 char
-
-void handle_exit(void);
-
-void handle_sig_terminate(int sig);
-
-void print_illegal_dram(struct sockaddr_storage addr);
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-void handle_sig_ignore(int sig) {}
-#pragma GCC diagnostic pop
 
 static int socketfd = 0;
 
