@@ -18,6 +18,23 @@ typedef struct block_node {
     struct block_node *prev;
 } block_node_t;
 
+void handle_ok_ack(struct sockaddr_storage storage);
+
+void handle_wrong_ack(struct sockaddr_storage incoming, char *msg_delim);
+
+void handle_nick_ack(struct sockaddr_storage incoming, char *msg_delim, char pkt_num[256]);
+
+void handle_not_ack();
+
+void send_lookup(send_node_t *node);
+
+void send_msg(send_node_t *node);
+
+void new_lookup(char nick[21], int startmsg, char *new_msg);
+
+void next_lookup();
+
+
 void handle_sig_alarm(int sig);
 recv_node_t *find_or_insert_recv_node(char *nick);
 recv_node_t *find_recv_node(char *nick);
@@ -27,7 +44,7 @@ void handle_heartbeat();
 void handle_ack(char *msg_delim, struct sockaddr_storage incoming);
 void free_recv_nodes(void);
 
-void send_msg(send_node_t *node);
+void send_node(send_node_t *node);
 
 void queue_lookup(nick_node_t *node, int callback);
 
