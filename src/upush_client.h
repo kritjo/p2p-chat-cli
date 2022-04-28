@@ -12,6 +12,12 @@ typedef struct recv_node {
     struct recv_node *next;
 } recv_node_t;
 
+typedef struct block_node {
+    char *nick;
+    struct block_node *next;
+    struct block_node *prev;
+} block_node_t;
+
 void handle_sig_alarm(int sig);
 recv_node_t *find_or_insert_recv_node(char *nick);
 recv_node_t *find_recv_node(char *nick);
@@ -26,6 +32,11 @@ void send_msg(send_node_t *node);
 void queue_lookup(nick_node_t *node, int callback);
 
 void maybe_send_msg(nick_node_t *nick_node, char *msg);
+
+void insert_block_node(char *nick);
+char is_blocked(char *nick);
+void delete_blocked(char *nick);
+void next_msg(nick_node_t *node);
 
 const char WAIT_INIT = -1;
 const char DO_NEW_LOOKUP = 2;

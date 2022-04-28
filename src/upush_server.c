@@ -12,8 +12,11 @@
 #include "send_packet.h"
 #include "nick_node_server.h"
 #include "network_utils.h"
+#include "utils.h"
 
 static int socketfd = 0;
+
+// UPS TODO: Mange forskjellige navn registrert på samme ip
 
 int main(int argc, char **argv) {
   char *port, loss_probability;
@@ -106,7 +109,6 @@ int main(int argc, char **argv) {
 
     // On all checks, we test if msg_part is NULL first as strcmp declares that the parameters should not be null
     if (msg_part == NULL || strcmp(msg_part, "PKT") != 0) {
-      // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
     }
@@ -115,7 +117,6 @@ int main(int argc, char **argv) {
     msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL ||
     (strcmp(msg_part, "0") != 0 && strcmp(msg_part, "1") != 0)) {
-      // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
     }
@@ -133,7 +134,6 @@ int main(int argc, char **argv) {
     // Get third part of msg, should be "REG" or "LOOKUP"
     msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL) {
-      // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
     } else if (strcmp(msg_part, "REG") == 0) {
@@ -141,7 +141,6 @@ int main(int argc, char **argv) {
     } else if (strcmp(msg_part, "LOOKUP") == 0) {
       curr_command = LOOKUP;
     } else {
-      // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
     }
@@ -152,7 +151,6 @@ int main(int argc, char **argv) {
     if (msg_part == NULL || nick_len < 1 || nick_len > 20) {
       // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
       // likely due to a transmission problem.
-      // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
     }
@@ -168,17 +166,9 @@ int main(int argc, char **argv) {
       nick[nick_len] = '\0';
     }
 
-    char legal_nick = 1;
-    // Check that the nick is legal. That is: only ascii characters and only alpha characters.
-    for (size_t i = 0; i < nick_len; i++) {
-      if (!isascii(nick[i]) || !isalpha(nick[i]) || isdigit(nick[i])) {
-        legal_nick = 0;
-      }
-    }
-    if (!legal_nick) {
+    if (!is_legal_nick(nick)) {
       // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
       // likely due to a transmission problem.
-      // Illegal datagrams is expected so this is not an error.
       print_illegal_dram(incoming);
       continue;
     }

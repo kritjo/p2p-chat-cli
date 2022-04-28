@@ -13,6 +13,7 @@
 #include "nick_node_client.h"
 #include "send_node.h"
 #include "real_time.h"
+#include "utils.h"
 
 static int socketfd;
 static char *heartbeat_msg;
@@ -21,6 +22,9 @@ static recv_node_t *first_recv_node = NULL;
 static char *my_nick;
 static nick_node_t server_node;
 static long timeout;
+static block_node_t *first_blocked = NULL;
+
+// TODO: Maybe add SA_RESTART flag to recvfrom
 
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
@@ -29,17 +33,8 @@ int main(int argc, char **argv) {
     my_nick = argv[1];
 
     // Check that the nick is legal. That is: only ascii characters and only alpha characters. Max len 20 char
-    size_t nick_len = strlen(my_nick);
-    char legal_nick = 1;
-    if (20 < nick_len) legal_nick = 0;
-    else {
-      for (size_t i = 0; i < nick_len; i++) {
-        if (!isascii(my_nick[i]) || !isalpha(my_nick[i]) || isdigit(my_nick[i])) {
-          legal_nick = 0;
-        }
-      }
-    }
-    if (!legal_nick) {
+
+    if (!is_legal_nick(my_nick)) {
       printf("Illegal nickname, only ascii alpha characters are allowed. Max len 20.\n");
     }
 
@@ -249,14 +244,12 @@ int main(int argc, char **argv) {
 
       // On all checks, we test if msg_part is NULL first as strcmp declares that the parameters should not be null
       if (msg_part == NULL) {
-        // Illegal datagrams is expected so this is not an error.
         continue;
       } else if (strcmp(msg_part, "PKT") == 0) {
         handle_pkt(msg_delim, incoming);
       } else if (strcmp(msg_part, "ACK") == 0) {
         handle_ack(msg_delim, incoming);
       } else {
-        // Illegal datagrams is expected so this is not an error.
         continue;
       }
     }
@@ -282,11 +275,28 @@ int main(int argc, char **argv) {
         return EXIT_SUCCESS;
       }
 
-      // TODO: Blocking commands
+      if (buf[0] == 'B' &&
+          buf[1] == 'L' &&
+          buf[2] == 'O' &&
+          buf[3] == 'C' &&
+          buf[4] == 'K' &&
+          buf[5] == ' ') {
+        insert_block_node(&buf[6]); // TODO: Check is legal nick;
+      } else if (buf[0] == 'U' &&
+          buf[1] == 'N' &&
+          buf[2] == 'B' &&
+          buf[3] == 'L' &&
+          buf[4] == 'O' &&
+          buf[5] == 'C' &&
+          buf[6] == 'K' &&
+          buf[7] == ' ') {
+        delete_blocked(&buf[8]); // TODO: Check is legal nick;
+      }
 
       // Illegal command check
       if (buf[0] != '@') {
-        continue; //TODO: maybe something else?
+        printf("Illegal command received\n");
+        continue;
       }
 
       // Extract nick and message. Not used strtok to avoid editing the buf.
@@ -302,6 +312,8 @@ int main(int argc, char **argv) {
       if (buf[startmsg] != ' ' || startmsg == 1) {
         continue; // Illegal nick if it does not end with ' ' or is zero-length
       }
+
+      if (is_blocked(nick) == 1) continue;
 
       // Alloc place for the message so that it is persistent
       char *new_msg = malloc(strlen(&buf[startmsg+1])+1 * sizeof(char));
@@ -372,20 +384,26 @@ void maybe_send_msg(nick_node_t *nick_node, char *msg) {
   add_msg(nick_node, msg);
 
   // If client is available to send to search_result, add client to send_node and send msg
-  if (nick_node->available_to_send == 1) {
-    nick_node->available_to_send = 0;
+  next_msg(nick_node);
+}
+
+void next_msg(nick_node_t *node) {
+  if (node == NULL) return;
+  if (node->available_to_send == 1) {
+    if (node->msg_to_send == NULL) return;
+    node->available_to_send = 0;
 
     // Create a new send node for this message
     send_node_t *new_node = malloc(sizeof(send_node_t));
-    new_node->nick_node = nick_node;
+    new_node->nick_node = node;
 
     // pkt num is string literal and should not be freed!
     new_node->should_free_pkt_num = 0;
 
-    new_node->pkt_num = nick_node->next_pkt_num;
-    nick_node->next_pkt_num = strcmp(nick_node->next_pkt_num, "1") == 0 ? "0" : "1";
+    new_node->pkt_num = node->next_pkt_num;
+    node->next_pkt_num = strcmp(node->next_pkt_num, "1") == 0 ? "0" : "1";
 
-    new_node->msg = pop_msg(nick_node);
+    new_node->msg = pop_msg(node);
     new_node->num_tries = 0;
     new_node->type = MSG;
 
@@ -397,6 +415,40 @@ void maybe_send_msg(nick_node_t *nick_node, char *msg) {
     insert_send_node(new_node);
 
     // Send the message
+    send_msg(new_node);
+  }
+}
+
+void next_lookup() {
+  if (server_node.available_to_send == 1) {
+    if (server_node.lookup_node == NULL) return;
+    server_node.available_to_send = 0;
+    send_node_t *new_node = malloc(sizeof(send_node_t));
+
+    // Pkt num should not be freed as it is string literal
+    new_node->should_free_pkt_num = 0;
+    new_node->pkt_num = server_node.next_pkt_num;
+    server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "1") == 0 ? "0" : "1";
+
+    new_node->next = NULL;
+    new_node->prev = NULL;
+
+    lookup_node_t *lookup = pop_lookup(&server_node);
+    new_node->nick_node = lookup->waiting_node;
+    new_node->msg = lookup->nick;
+    free(lookup);
+
+    new_node->num_tries = 0;
+    new_node->type = LOOKUP;
+
+    // Alloc and create a new timer, do not set timeout yet. The same timer will be used throughout the send node's
+    // lifetime.
+    new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+    new_node->timeout_timer->timed_out_send_node = new_node;
+    register_usr1_custom_sig(new_node->timeout_timer);
+
+    // Insert send node in linked list and send the lookup msg
+    insert_send_node(new_node);
     send_msg(new_node);
   }
 }
@@ -449,11 +501,7 @@ void send_msg(send_node_t *node) {
 
       unsigned long pkt_len = 13  + strlen(node->msg) + 1;
       char pkt[pkt_len];
-
-      strcpy(pkt, "PKT ");
-      strcat(pkt, node->pkt_num);
-      strcat(pkt, " LOOKUP ");
-      strcat(pkt, node->msg);
+      sprintf(pkt, "PKT %s LOOKUP %s", node->pkt_num, node->msg);
 
       send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) &server, get_addr_len(server));
 
@@ -504,14 +552,7 @@ void send_msg(send_node_t *node) {
 
     unsigned long pkt_len = 20 + strlen(node->pkt_num) + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
     char pkt[pkt_len];
-    strcpy(pkt, "PKT ");
-    strcat(pkt, node->pkt_num);
-    strcat(pkt, " FROM ");
-    strcat(pkt, my_nick);
-    strcat(pkt, " TO ");
-    strcat(pkt, node->nick_node->nick);
-    strcat(pkt, " MSG ");
-    strcat(pkt, node->msg);
+    sprintf(pkt, "PKT %s FROM %s TO %s MSG %s", node->pkt_num, my_nick, node->nick_node->nick, node->msg);
 
     // Send message and set timeout for ack
     send_packet(socketfd, pkt, pkt_len, 0, (struct sockaddr *) node->nick_node->addr, get_addr_len(*node->nick_node->addr));
@@ -584,35 +625,32 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
     // Cancel timer
     set_time_usr1_timer(curr->timeout_timer, 0);
     curr->timeout_timer->do_not_honour = 1;
+    nick_node_t *curr_n = curr->nick_node;
+    free(curr->msg);
+    delete_send_node(curr);
+    curr_n->available_to_send = 1;
 
     // Check if there are more messages queued
-    if (curr->nick_node->msg_to_send == NULL) {
-      curr->nick_node->available_to_send = 1;
-      free(curr->msg);
-      delete_send_node(curr);
-      return;
-    }
-
-    // Send next message
-    curr->pkt_num = curr->nick_node->next_pkt_num;
-    curr->num_tries = 0;
-    free(curr->msg);
-    curr->msg = pop_msg(curr->nick_node);
-    curr->nick_node->next_pkt_num = strcmp(curr->pkt_num, "1") == 0 ? "0" : "1";
-    send_msg(curr);
+    next_msg(curr_n);
     return;
 
   } else if (strcmp(msg_part, "WRONG") == 0) {
     msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL) {return;}
-    if (strcmp(msg_part, "NAME") == 0) {
-      // TODO: What happens with these
-      return;
+    send_node_t *curr = find_send_node(NULL);
+    while (curr != NULL) {
+      if (cmp_addr_port(*curr->nick_node->addr, incoming) == 1) break;
+      curr = curr->next;
     }
-    if (strcmp(msg_part, "FORMAT") == 0) {
-      // TODO: What happens with these
-      return;
+    if (curr == NULL) {
+      fprintf(stderr, "Could not find lookup node.\n");
     }
+    fprintf(stderr, "Sent illegal %s to %s\n", msg_part, curr->nick_node->nick);
+    curr->nick_node->available_to_send = 1;
+    nick_node_t *curr_n = curr->nick_node;
+    delete_send_node(curr);
+    next_msg(curr_n);
+    return;
   } else if (strcmp(msg_part, "NICK") == 0) {
     // Get the nick, the IP and the port and insert to cache. Check if there are any dependency nodes that we should "wake"
     send_node_t *curr = find_send_node(NULL);
@@ -779,6 +817,18 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
   } else if (strcmp(msg_part, "NOT") == 0) {
     // Find the lookup node that failed, print error and continue with next if there are any
+    send_node_t *curr = find_send_node(NULL);
+    while (curr != NULL) {
+      if (curr->type == LOOKUP) break;
+      curr = curr->next;
+    }
+    if (curr == NULL) fprintf(stderr, "Could not find lookup node!\n");
+    else {
+      printf("NICK %s NOT REGISTERED\n", curr->msg);
+      delete_send_node(curr);
+      server_node.available_to_send = 1;
+      next_lookup();
+    }
   } else {
     return;
   }
@@ -787,7 +837,6 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   char *msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL) {
-    // Illegal datagrams is expected so this is not an error.
     return;
   }
 
@@ -809,42 +858,32 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
 
   char nick[nick_len+1];
   strcpy(nick, msg_part);
-  char legal_nick = 1;
-  // Check that the nick is legal. That is: only ascii characters and only alpha characters.
-  for (size_t i = 0; i < nick_len; i++) {
-    if (!isascii(nick[i]) || !isalpha(nick[i]) || isdigit(nick[i])) {
-      legal_nick = 0;
-    }
-  }
-  if (!legal_nick) {
+  if (!is_legal_nick(nick)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
     return;
   }
+  if (is_blocked(nick) == 1) return;
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, "TO") != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
-    // Illegal datagrams is expected so this is not an error.
     return;
   }
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, my_nick) != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG NAME");
-    // Illegal datagrams is expected so this is not an error.
     return;
   }
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, "MSG") != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
-    // Illegal datagrams is expected so this is not an error.
     return;
   }
 
   msg_part = strtok(NULL, ""); // Get the rest
   if (msg_part == NULL || 1400 < strlen(msg_part)) {
-    // Illegal datagrams is expected so this is not an error.
     return;
   }
 
@@ -915,8 +954,63 @@ void handle_heartbeat() {
   send_packet(socketfd, heartbeat_msg, strlen(heartbeat_msg)+1, 0, (struct sockaddr *) &server, get_addr_len(server));
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 void handle_sig_alarm(int sig) {
+#pragma GCC diagnostic pop
   printf("Timeout. Did not get ACK from server on registration.\n");
   free(heartbeat_msg);
   exit(EXIT_SUCCESS); // This is not an error in the program.
+}
+
+void insert_block_node(char *nick) {
+  if (is_blocked(nick) == 1) return;
+  block_node_t *blocked = malloc(sizeof(block_node_t));
+  blocked->nick = malloc(strlen(nick) + 1);
+  strcpy(blocked->nick, nick);
+
+  if (first_blocked == NULL) {
+    first_blocked = blocked;
+    first_blocked->next = NULL;
+    first_blocked->prev = NULL;
+    return;
+  }
+
+  first_blocked->prev = blocked;
+  blocked->next = first_blocked;
+  first_blocked = blocked;
+}
+
+char is_blocked(char *nick) {
+  block_node_t *blocked = first_blocked;
+  while (blocked != NULL) {
+    if (strcmp(blocked->nick, nick) == 0) return 1;
+    blocked = blocked->next;
+  }
+  return 0;
+}
+
+void delete_blocked(char *nick) {
+  block_node_t *blocked = first_blocked;
+  while (blocked != NULL) {
+    if (strcmp(blocked->nick, nick) == 0) break;
+    blocked = blocked->next;
+  }
+  if (blocked == NULL) return;
+
+  if (blocked->prev == 0) {
+    first_blocked = blocked->next;
+    if (first_blocked != NULL) first_blocked->prev = 0;
+    free(blocked->nick);
+    free(blocked);
+  } else if (blocked->next == 0) {
+    blocked->prev->next = 0;
+    free(blocked->nick);
+    free(blocked);
+  } else {
+    blocked->prev->next = blocked->next;
+    blocked->next->prev = blocked->prev;
+    free(blocked->nick);
+    free(blocked);
+  }
 }
