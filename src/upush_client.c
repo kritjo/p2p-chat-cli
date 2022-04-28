@@ -10,22 +10,22 @@
 #include "upush_client.h"
 #include "send_packet.h"
 #include "network_utils.h"
-#include "nick_node_client.h"
-#include "send_node.h"
 #include "real_time.h"
-#include "utils.h"
+#include "common.h"
+#include "linked_list.h"
 
 static int socketfd;
 static char *heartbeat_msg;
 static struct sockaddr_storage server;
 
-void register_with_server();
-
-static recv_node_t *first_recv_node = NULL;
 static char *my_nick;
 static nick_node_t server_node;
 static long timeout;
-static block_node_t *first_blocked = NULL;
+
+static node_t **blocked_head = NULL;
+static node_t **recv_head = NULL;
+static node_t **send_head = NULL;
+static node_t **nick_head = NULL;
 
 // TODO: Maybe add SA_RESTART flag to recvfrom
 
@@ -145,6 +145,14 @@ int main(int argc, char **argv) {
   ssize_t bytes_received;
   socklen_t addrlen = sizeof(struct sockaddr_storage);
   struct sockaddr_storage incoming;
+  blocked_head = malloc(sizeof(node_t *));
+  *blocked_head = NULL;
+  recv_head = malloc(sizeof(node_t *));
+  *recv_head = NULL;
+  send_head = malloc(sizeof (node_t *));
+  *send_head = NULL;
+  nick_head = malloc(sizeof (node_t *));
+  *nick_head = NULL;
   while (1) {
     fd_set fds;
     FD_ZERO(&fds);
@@ -230,9 +238,10 @@ int main(int argc, char **argv) {
         free(heartbeat_msg);
         close(socketfd);
         close(heartbeatfd);
-        free_recv_nodes();
-        delete_all_nick_nodes();
-        delete_all_send_nodes();
+        delete_all_nodes(recv_head, NULL);
+        delete_all_nodes(blocked_head, NULL);
+        delete_all_nodes(send_head, NULL);
+        delete_all_nodes(nick_head, NULL);
         return EXIT_SUCCESS;
       }
 
@@ -246,7 +255,9 @@ int main(int argc, char **argv) {
           printf("Illegal nick.\n");
           continue;
         }
-        insert_block_node(&buf[6]);
+        if (!find_node(blocked_head, &buf[6])) {
+          insert_node(blocked_head, &buf[6], (void *) 1);
+        }
       } else if (buf[0] == 'U' &&
                  buf[1] == 'N' &&
                  buf[2] == 'B' &&
@@ -259,7 +270,7 @@ int main(int argc, char **argv) {
           printf("Illegal nick.\n");
           continue;
         }
-        delete_blocked(&buf[8]);
+        delete_node_by_key(blocked_head, &buf[8], NULL);
       }
 
       // Illegal command check
@@ -282,23 +293,24 @@ int main(int argc, char **argv) {
         continue; // Illegal nick if it does not end with ' ' or is zero-length
       }
 
-      if (is_blocked(nick) == 1) continue;
+      if (find_node(blocked_head, nick)) continue;
 
       // Alloc place for the message so that it is persistent
       char *new_msg = malloc(strlen(&buf[startmsg + 1]) + 1 * sizeof(char));
       strcpy(new_msg, &buf[startmsg + 1]);
 
       // See if we already have a nick_node in the cache or if we need to do a new lookup.
-      nick_node_t *search_result = find_nick_node(nick);
-      if (search_result == NULL) {
+      node_t *search = find_node(nick_head, nick);
+      if (search == NULL) {
         new_lookup(nick, startmsg, new_msg);
         continue;
       }
 
+      nick_node_t *search_result = (nick_node_t *) search->data;
       // We got a successful search result, maybe send if client is ready
       // Add msg to back of queue
       add_msg(search_result, new_msg);
-      // If client is available to send to search_result, add client to send_node and send msg
+      // If client is available to send to search, add client to send_node and send msg
       next_msg(search_result);
     }
   }
@@ -306,7 +318,7 @@ int main(int argc, char **argv) {
   free(heartbeat_msg);
   close(socketfd);
   close(heartbeatfd);
-  free_recv_nodes();
+  delete_all_nodes(recv_head, NULL);
   return EXIT_FAILURE;
 }
 
@@ -394,7 +406,7 @@ void new_lookup(char nick[21], int startmsg, char *new_msg) {
   new_send_node->timeout_timer->timed_out_send_node = new_send_node;
   register_usr1_custom_sig(new_send_node->timeout_timer);
 
-  insert_send_node(new_send_node);
+  insert_node(send_head, new_nick_node->nick, new_send_node);
 
   queue_lookup(new_nick_node, 0);
   next_lookup();
@@ -425,7 +437,8 @@ void next_msg(nick_node_t *node) {
     new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
     new_node->timeout_timer->timed_out_send_node = new_node;
     register_usr1_custom_sig(new_node->timeout_timer);
-    insert_send_node(new_node);
+
+    insert_node(send_head, node->nick, new_node);
 
     // Send the message
     send_node(new_node);
@@ -461,7 +474,7 @@ void next_lookup() {
     register_usr1_custom_sig(new_node->timeout_timer);
 
     // Insert send node in linked list and send the lookup msg
-    insert_send_node(new_node);
+    insert_node(send_head, new_node->msg, new_node);
     send_node(new_node);
   }
 }
@@ -511,8 +524,7 @@ void send_msg(send_node_t *node) {
     // Too many tries
     // Discard msg and get next if any.
     node->nick_node->available_to_send = 1;
-    free(node->msg);
-    delete_send_node(node);
+    delete_node_by_key(send_head, node->nick_node->nick, NULL);
     next_lookup();
   }
 }
@@ -539,7 +551,9 @@ void send_lookup(send_node_t *node) {
     strcpy(nick, node->msg);
 
     for (int i = 0; i < 2; i++) { // Do twice to get both LOOKUP and possible MSG nodes
-      send_node_t *search_send = find_send_node(nick);
+      node_t *search = find_node(send_head, nick);
+      if (search == NULL) continue;
+      send_node_t *search_send = search->data;
 
       if (search_send != NULL && search_send->type == MSG && search_send->num_tries == -1) {
         free(search_send->nick_node->nick);
@@ -551,12 +565,12 @@ void send_lookup(send_node_t *node) {
         if (search_send->type == MSG) {
           free(search_send->msg);
         }
-        delete_send_node(search_send);
+        delete_node(send_head, search, NULL);
       }
     }
 
-    nick_node_t *search = find_nick_node(nick);
-    if (search != NULL) delete_nick_node(search);
+    node_t *search = find_node(nick_head, nick);
+    if (search != NULL) delete_node(nick_head, search, NULL);
     server_node.available_to_send = 1;
 
     next_lookup();
@@ -577,7 +591,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
   } else if (strcmp(msg_part, "WRONG") == 0) {
     handle_wrong_ack(incoming, msg_delim);
   } else if (strcmp(msg_part, "NICK") == 0) {
-    handle_nick_ack(incoming, msg_delim, pkt_num);
+    handle_nick_ack(msg_delim, pkt_num);
   } else if (strcmp(msg_part, "NOT") == 0) {
     handle_not_ack();
   }
@@ -585,36 +599,39 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming) {
 
 void handle_not_ack() {
   // Find the lookup node that failed, print error and continue with next if there are any
-  send_node_t *curr = find_send_node(NULL);
+  node_t *curr = *send_head;
   while (curr != NULL) {
-    if (curr->type == LOOKUP) break;
+    if (((send_node_t *)curr->data)->type == LOOKUP) break;
     curr = curr->next;
   }
   if (curr == NULL) fprintf(stderr, "Could not find lookup node!\n");
   else {
-    printf("NICK %s NOT REGISTERED\n", curr->msg);
-    delete_send_node(curr);
+    printf("NICK %s NOT REGISTERED\n", ((send_node_t *)curr->data)->msg);
+    delete_node(send_head, curr, NULL);
     server_node.available_to_send = 1;
     next_lookup();
   }
 }
 
-void handle_nick_ack(struct sockaddr_storage incoming, char *msg_delim, char pkt_num[256]) {
+void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
   // Get the nick, the IP and the port and insert to cache. Check if there are any dependency nodes that we should "wake"
-  send_node_t *curr = find_send_node(NULL);
-  while (curr != NULL) {
-    if (curr->type == LOOKUP) {
+  node_t *search = *send_head;
+  while (search != NULL) {
+    if (((send_node_t *)search->data)->type == LOOKUP) {
       break;
     }
-    curr = curr->next;
+    search = search->next;
   }
-  if (curr == NULL) {
+  if (search == NULL) {
     fprintf(stderr, "Could not find lookup node to ack\n");
     return;
   }
+  send_node_t *curr = ((send_node_t *)search->data);
+
   if (strcmp(curr->pkt_num, pkt_num) != 0) {
     return; // Discard wrong ACK.
   }
+
 
   // Get nick
   char *msg_part = strtok(NULL, msg_delim);
@@ -680,9 +697,9 @@ void handle_nick_ack(struct sockaddr_storage incoming, char *msg_delim, char pkt
     new_node->type = CLIENT;
     new_node->available_to_send = 1;
 
-    send_node_t *notify = find_send_node(NULL);
+    node_t *notify = *send_head;
     while (notify != NULL) {
-      if (curr->nick_node == notify->nick_node) {
+      if (curr->nick_node == ((send_node_t *) notify->data)->nick_node) {
         break;
       }
       notify = notify->next;
@@ -691,12 +708,13 @@ void handle_nick_ack(struct sockaddr_storage incoming, char *msg_delim, char pkt
       fprintf(stderr, "Could not find expected notify node.\n");
       return;
     }
-    notify->num_tries = RE_0;
-    send_node(notify);
+    ((send_node_t *) notify->data)->num_tries = RE_0;
+    send_node( ((send_node_t *) notify->data));
   } else {
-    send_node_t *curr_n = find_send_node(NULL);
+    node_t *curr_n = *send_head;
     while (curr_n != NULL) {
-      if (curr_n->type == MSG && strcmp(curr_n->nick_node->nick, nick) == 0) {
+      if ( ((send_node_t *) curr_n->data)->type == MSG &&
+      strcmp(((send_node_t *) curr_n->data)->nick_node->nick, nick) == 0) {
         break;
       }
       curr_n = curr_n->next;
@@ -706,21 +724,21 @@ void handle_nick_ack(struct sockaddr_storage incoming, char *msg_delim, char pkt
       fprintf(stderr, "Could not find expected notify node.\n");
       return;
     }
-    nick_node_t *new_node = curr_n->nick_node;
+    nick_node_t *new_node = ((send_node_t *) curr_n->data)->nick_node;
     new_node->addr = malloc(sizeof(struct sockaddr_storage));
     *new_node->addr = addr;
     new_node->type = CLIENT;
     new_node->available_to_send = 0;
     new_node->msg_to_send = NULL;
     new_node->next_pkt_num = "1";
-    insert_nick_node(new_node);
+    insert_node(nick_head, nick, new_node);
 
-    curr_n->num_tries = 0;
-    send_node(curr_n);
+    ((send_node_t *) curr_n->data)->num_tries = 0;
+    send_node(((send_node_t *) curr_n->data));
   }
 
   if (should_delete) {
-    delete_send_node(curr);
+    delete_node(send_head, search, NULL);
   }
   server_node.available_to_send = 1;
   next_lookup();
@@ -729,18 +747,19 @@ void handle_nick_ack(struct sockaddr_storage incoming, char *msg_delim, char pkt
 void handle_wrong_ack(struct sockaddr_storage incoming, char *msg_delim) {
   char *msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL) { return; }
-  send_node_t *curr = find_send_node(NULL);
+  node_t *curr = *send_head;
   while (curr != NULL) {
-    if (cmp_addr_port(*curr->nick_node->addr, incoming) == 1) break;
+    if (cmp_addr_port(*((send_node_t *) curr->data)->nick_node->addr, incoming) == 1) break;
     curr = curr->next;
   }
   if (curr == NULL) {
     fprintf(stderr, "Could not find lookup node.\n");
+    return;
   }
-  fprintf(stderr, "Sent illegal %s to %s\n", msg_part, curr->nick_node->nick);
-  curr->nick_node->available_to_send = 1;
-  nick_node_t *curr_n = curr->nick_node;
-  delete_send_node(curr);
+  fprintf(stderr, "Sent illegal %s to %s\n", msg_part, ((send_node_t *) curr->data)->nick_node->nick);
+  ((send_node_t *) curr->data)->nick_node->available_to_send = 1;
+  nick_node_t *curr_n = ((send_node_t *) curr->data)->nick_node;
+  delete_node(send_head, curr, NULL);
   next_msg(curr_n);
 }
 
@@ -750,9 +769,9 @@ void handle_ok_ack(struct sockaddr_storage storage) {
   if (server_ack == 1) return; // Ignore registration OK
 
   // Find the node to ack
-  send_node_t *curr = find_send_node(NULL);
+  node_t *curr = *send_head;
   while (curr != NULL) {
-    if (curr->type == MSG && cmp_addr_port(*curr->nick_node->addr, storage) == 1) {
+    if (((send_node_t *) curr->data)->type == MSG && cmp_addr_port(*((send_node_t *) curr->data)->nick_node->addr, storage) == 1) {
       break;
     }
     curr = curr->next;
@@ -763,17 +782,15 @@ void handle_ok_ack(struct sockaddr_storage storage) {
   }
 
   // Cancel timer
-  set_time_usr1_timer(curr->timeout_timer, 0);
-  curr->timeout_timer->do_not_honour = 1;
-  nick_node_t *curr_n = curr->nick_node;
-  free(curr->msg);
-  delete_send_node(curr);
+  set_time_usr1_timer(((send_node_t *) curr->data)->timeout_timer, 0);
+  ((send_node_t *) curr->data)->timeout_timer->do_not_honour = 1;
+  nick_node_t *curr_n = ((send_node_t *) curr->data)->nick_node;
+  free(((send_node_t *) curr->data)->msg);
+  delete_node(send_head, curr, NULL);
   curr_n->available_to_send = 1;
 
   // Check if there are more messages queued
   next_msg(curr_n);
-  return;
-
 }
 
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
@@ -804,7 +821,8 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
     return;
   }
-  if (is_blocked(nick) == 1) return;
+
+  if (find_node(blocked_head, nick)) return;
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, "TO") != 0)) {
@@ -829,7 +847,17 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
     return;
   }
 
-  recv_node_t *recv_node = find_or_insert_recv_node(nick);
+  node_t *recv = find_node(recv_head, nick);
+  recv_node_t *recv_node;
+
+  if (recv == NULL) {
+    recv_node = malloc(sizeof(recv_node_t));
+    recv_node->expected_msg = "-1";
+    recv_node->stamp = 0;
+    insert_node(recv_head, nick, recv_node);
+  } else {
+    recv_node = (recv_node_t *) recv->data;
+  }
 
   // If this is the first ever message or a new init msg, save stamp.
   if (strcmp(pkt_num, "0") != 0 && strcmp(pkt_num, "1") != 0) {
@@ -851,47 +879,6 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   }
 }
 
-recv_node_t *find_recv_node(char *nick) {
-  recv_node_t *curr = first_recv_node;
-  while (curr != NULL) {
-    if (strcmp(curr->nick, nick) == 0) {
-      return curr;
-    }
-    curr = curr->next;
-  }
-  return NULL;
-}
-
-recv_node_t *find_or_insert_recv_node(char *nick) {
-  recv_node_t *curr = find_recv_node(nick);
-  if (curr != NULL) return curr;
-  if (first_recv_node == NULL) {
-    first_recv_node = malloc(sizeof(recv_node_t));
-    first_recv_node->nick = nick;
-    first_recv_node->expected_msg = "-1";
-    first_recv_node->stamp = 0;
-    first_recv_node->next = NULL;
-    return first_recv_node;
-  }
-  curr = malloc(sizeof(recv_node_t));
-  curr->nick = nick;
-  curr->expected_msg = "-1";
-  first_recv_node->stamp = 0;
-  curr->next = first_recv_node;
-  first_recv_node = curr;
-  return curr;
-}
-
-void free_recv_nodes(void) {
-  recv_node_t *curr = first_recv_node;
-  recv_node_t *tmp;
-  while (curr != NULL) {
-    tmp = curr;
-    curr = curr->next;
-    free(tmp);
-  }
-}
-
 void handle_heartbeat() {
   send_packet(socketfd, heartbeat_msg, strlen(heartbeat_msg) + 1, 0, (struct sockaddr *) &server, get_addr_len(server));
 }
@@ -906,54 +893,44 @@ void handle_sig_alarm(int sig) {
   exit(EXIT_SUCCESS); // This is not an error in the program.
 }
 
-void insert_block_node(char *nick) {
-  if (is_blocked(nick) == 1) return;
-  block_node_t *blocked = malloc(sizeof(block_node_t));
-  blocked->nick = malloc(strlen(nick) + 1);
-  strcpy(blocked->nick, nick);
 
-  if (first_blocked == NULL) {
-    first_blocked = blocked;
-    first_blocked->next = NULL;
-    first_blocked->prev = NULL;
+void add_msg(nick_node_t *node, char *msg) {
+  message_node_t *new_message = malloc(sizeof(message_node_t));
+  new_message->message = msg;
+  new_message->next = NULL;
+  if (node->msg_to_send == NULL) {
+    node->msg_to_send = new_message;
     return;
   }
-
-  first_blocked->prev = blocked;
-  blocked->next = first_blocked;
-  first_blocked = blocked;
+  message_node_t *curr = node->msg_to_send;
+  while (curr->next != NULL) curr = curr->next;
+  curr->next = new_message;
 }
 
-char is_blocked(char *nick) {
-  block_node_t *blocked = first_blocked;
-  while (blocked != NULL) {
-    if (strcmp(blocked->nick, nick) == 0) return 1;
-    blocked = blocked->next;
-  }
-  return 0;
+char *pop_msg(nick_node_t *node) {
+  char *msg = node->msg_to_send->message;
+  message_node_t *tmp = node->msg_to_send;
+  node->msg_to_send = node->msg_to_send->next;
+  free (tmp);
+  return msg;
 }
 
-void delete_blocked(char *nick) {
-  block_node_t *blocked = first_blocked;
-  while (blocked != NULL) {
-    if (strcmp(blocked->nick, nick) == 0) break;
-    blocked = blocked->next;
-  }
-  if (blocked == NULL) return;
+lookup_node_t *pop_lookup(nick_node_t *node) {
+  lookup_node_t *popped = node->lookup_node;
+  node->lookup_node = node->lookup_node->next;
+  return popped;
+}
 
-  if (blocked->prev == 0) {
-    first_blocked = blocked->next;
-    if (first_blocked != NULL) first_blocked->prev = 0;
-    free(blocked->nick);
-    free(blocked);
-  } else if (blocked->next == 0) {
-    blocked->prev->next = 0;
-    free(blocked->nick);
-    free(blocked);
-  } else {
-    blocked->prev->next = blocked->next;
-    blocked->next->prev = blocked->prev;
-    free(blocked->nick);
-    free(blocked);
+void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting) {
+  lookup_node_t *new_lookup = malloc(sizeof(lookup_node_t));
+  new_lookup->nick = nick;
+  new_lookup->waiting_node = waiting;
+  new_lookup->next = NULL;
+  if (node->lookup_node == NULL) {
+    node->lookup_node = new_lookup;
+    return;
   }
+  lookup_node_t *curr = node->lookup_node;
+  while (curr->next != NULL) curr = curr->next;
+  curr->next = new_lookup;
 }

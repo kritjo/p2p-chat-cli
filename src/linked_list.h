@@ -12,4 +12,10 @@ typedef struct node {
     struct node *prev;
 } node_t;
 
+void delete_node_by_key(node_t **head, char *key, void (*free_func)(node_t *free_node));
+node_t *find_node(node_t **head, char *key);
+void insert_node(node_t **head, char *key, void *data);
+void delete_all_nodes(node_t **head, void (*free_func)(node_t *free_node));
+void delete_node(node_t **head, node_t *node, void (*free_func)(node_t *free_node));
+
 #endif //SRC_LINKED_LIST_H

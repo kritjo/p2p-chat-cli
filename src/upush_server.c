@@ -3,18 +3,19 @@
 #include <time.h>
 #include <signal.h>
 #include <sys/socket.h>
-#include <ctype.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <string.h>
 
 #include "upush_server.h"
 #include "send_packet.h"
-#include "nick_node_server.h"
+#include "linked_list.h"
 #include "network_utils.h"
-#include "utils.h"
+#include "common.h"
 
+#define TIMEOUT 30
 static int socketfd = 0;
+static node_t **nick_head = NULL;
 
 // UPS TODO: Mange forskjellige navn registrert på samme ip
 
@@ -71,6 +72,8 @@ int main(int argc, char **argv) {
   /*
    **************** MAIN LOOP ****************
    */
+  nick_head = malloc(sizeof(node_t *));
+  *nick_head = NULL;
   printf("Press CTRL+c to quit.\n");
 
   char buf[MAX_MSG + 1]; // Incoming message buffer
@@ -173,15 +176,15 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    nick_node_t *result_node = find_nick_node(nick);
+    node_t *result_node = find_node(nick_head, nick);
 
     if (curr_command == REG) {
       // Check if nick exists, in that case, replace current address in table.
       if (result_node == NULL) {
         // Now we know that the nick does not exist.
         nick_node_t *curr_nick = malloc(sizeof(nick_node_t));
-        curr_nick->nick = malloc((nick_len + 1) * sizeof(char));
-        strcpy(curr_nick->nick, nick);
+        char *pers_nick = malloc((nick_len + 1) * sizeof(char));
+        strcpy(pers_nick, nick);
         curr_nick->registered_time = malloc(sizeof(time_t));
         curr_nick->addr = malloc(sizeof(struct sockaddr_storage));
         *curr_nick->addr = incoming;
@@ -196,16 +199,7 @@ int main(int argc, char **argv) {
         }
 
 
-        if (insert_nick_node(curr_nick) == -1) {
-          fprintf(stderr, "Nick table is full. Trying to clean.\n");
-          delete_old_nick_nodes();
-
-          if (insert_nick_node(curr_nick) == -1) {
-            fprintf(stderr, "Nick table is full also after cleanup.\n");
-            free_nick_node(curr_nick);
-            continue;
-          }
-        }
+        insert_node(nick_head, pers_nick, curr_nick);
 
         // Registration completed send ACK
         if (send_ack(socketfd, incoming, pkt_num, 1, "OK") == (size_t) -1) {
@@ -215,7 +209,7 @@ int main(int argc, char **argv) {
         // Update the nick with the incoming adr and current time.
         // This implies that the code flow will end up here for both updates
         // to an entry from a new addr, and heartbeats.
-        nick_node_t *curr_nick = find_nick_node(nick);
+        nick_node_t *curr_nick = (nick_node_t *) result_node->data;
 
         *curr_nick->addr = incoming;
         time(curr_nick->registered_time);
@@ -239,8 +233,9 @@ int main(int argc, char **argv) {
 
       time_t current_time;
       time(&current_time);
+      nick_node_t *curr_nick = (nick_node_t *) result_node->data;
 
-      if (current_time - *result_node->registered_time > TIMEOUT) {
+      if (current_time - *curr_nick->registered_time > TIMEOUT) {
         if (send_ack(socketfd, incoming, pkt_num, 1, "NOT FOUND") == (size_t) -1) {
           fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
         }
@@ -248,8 +243,8 @@ int main(int argc, char **argv) {
       }
       char addr_str[INET6_ADDRSTRLEN];
       char port_str[7];
-      get_addr(*result_node->addr, (char *) &addr_str, INET6_ADDRSTRLEN);
-      get_port(*result_node->addr, (char *) port_str);
+      get_addr(*curr_nick->addr, (char *) &addr_str, INET6_ADDRSTRLEN);
+      get_port(*curr_nick->addr, (char *) port_str);
       if (send_ack(socketfd, incoming,pkt_num, 5,
                "NICK",
                nick,
@@ -280,5 +275,11 @@ void handle_sig_terminate(int sig) {
 
 void handle_exit(void) {
   if (socketfd != 0) close(socketfd);
-  delete_all_nick_nodes();
+  delete_all_nodes(nick_head, free_nick_node);
+}
+
+void free_nick_node(node_t *node) {
+  nick_node_t *curr_nick = (nick_node_t *) node->data;
+  free(curr_nick->registered_time);
+  free(curr_nick->addr);
 }

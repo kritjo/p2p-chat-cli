@@ -3,7 +3,6 @@
 
 #include <bits/types/timer_t.h>
 #include <bits/types/time_t.h>
-#include "send_node.h"
 
 typedef struct usr1_sigval{
     timer_t timer;

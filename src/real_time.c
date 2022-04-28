@@ -3,6 +3,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <signal.h>
+#include <malloc.h>
 #include "real_time.h"
 
 int register_usr1_custom_sig(usr1_sigval_t *info) {
