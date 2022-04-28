@@ -565,6 +565,8 @@ void send_lookup(send_node_t *node) {
         if (search_send->type == MSG) {
           free(search_send->msg);
         }
+        send_node_t *pSendNode = ((send_node_t *)search->data);
+        unregister_usr_1_custom_sig(pSendNode->timeout_timer);
         delete_node(send_head, search, NULL);
       }
     }
@@ -606,7 +608,9 @@ void handle_not_ack() {
   }
   if (curr == NULL) fprintf(stderr, "Could not find lookup node!\n");
   else {
-    printf("NICK %s NOT REGISTERED\n", ((send_node_t *)curr->data)->msg);
+    send_node_t *node = ((send_node_t *)curr->data);
+    printf("NICK %s NOT REGISTERED\n", node->msg);
+    unregister_usr_1_custom_sig(node->timeout_timer);
     delete_node(send_head, curr, NULL);
     server_node.available_to_send = 1;
     next_lookup();
@@ -719,7 +723,6 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
       }
       curr_n = curr_n->next;
     }
-    free(nick);
     if (curr_n == NULL) {
       fprintf(stderr, "Could not find expected notify node.\n");
       return;
@@ -732,12 +735,15 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
     new_node->msg_to_send = NULL;
     new_node->next_pkt_num = "1";
     insert_node(nick_head, nick, new_node);
+    free(nick);
 
     ((send_node_t *) curr_n->data)->num_tries = 0;
     send_node(((send_node_t *) curr_n->data));
   }
 
   if (should_delete) {
+    send_node_t *node = ((send_node_t *)search->data);
+    unregister_usr_1_custom_sig(node->timeout_timer);
     delete_node(send_head, search, NULL);
   }
   server_node.available_to_send = 1;
@@ -757,8 +763,10 @@ void handle_wrong_ack(struct sockaddr_storage incoming, char *msg_delim) {
     return;
   }
   fprintf(stderr, "Sent illegal %s to %s\n", msg_part, ((send_node_t *) curr->data)->nick_node->nick);
-  ((send_node_t *) curr->data)->nick_node->available_to_send = 1;
-  nick_node_t *curr_n = ((send_node_t *) curr->data)->nick_node;
+  send_node_t *node = ((send_node_t *)curr->data);
+  node->nick_node->available_to_send = 1;
+  unregister_usr_1_custom_sig(node->timeout_timer);
+  nick_node_t *curr_n = node->nick_node;
   delete_node(send_head, curr, NULL);
   next_msg(curr_n);
 }
@@ -783,9 +791,9 @@ void handle_ok_ack(struct sockaddr_storage storage) {
 
   // Cancel timer
   set_time_usr1_timer(((send_node_t *) curr->data)->timeout_timer, 0);
-  ((send_node_t *) curr->data)->timeout_timer->do_not_honour = 1;
   nick_node_t *curr_n = ((send_node_t *) curr->data)->nick_node;
   free(((send_node_t *) curr->data)->msg);
+  unregister_usr_1_custom_sig(((send_node_t *) curr->data)->timeout_timer);
   delete_node(send_head, curr, NULL);
   curr_n->available_to_send = 1;
 

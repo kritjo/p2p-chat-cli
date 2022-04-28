@@ -21,6 +21,7 @@ void insert_node(node_t **head, char *key, void *data) {
 
   (*head)->prev = node;
   node->next = (*head);
+  node->prev = NULL;
   (*head) = node;
 }
 
@@ -70,5 +71,7 @@ void delete_all_nodes(node_t **head, void (*free_func)(node_t *free_node)) {
     node_t *tmp = node;
     node = node->next;
     if (free_func != NULL) free_func(tmp);
+    free(tmp->key);
+    free(tmp);
   }
 }
