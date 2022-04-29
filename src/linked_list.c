@@ -75,3 +75,5 @@ void delete_all_nodes(node_t **head, void (*free_func)(node_t *free_node)) {
     free(tmp);
   }
 }
+
+void free_generic(node_t *node) { free(node->data); }
