@@ -78,10 +78,28 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS; // Return success as this is not an error, but expected without args.
   }
 
+  // Initialize hints and getaddrinfo of server to store in sockaddr_storage.
+  struct addrinfo server_hints, *server_res;
+  memset(&server_hints, 0, sizeof(server_hints));
+  server_hints.ai_family = AF_UNSPEC;
+  server_hints.ai_socktype = SOCK_DGRAM;
+  server_hints.ai_flags = AI_NUMERICSERV;
+
+  int rc;
+  if ((rc = getaddrinfo(server_addr, server_port, &server_hints, &server_res)) != 0) {
+    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rc));
+    return -1;
+  }
+
+  // Set static global struct to keep track of server address
+  memset(&server, 0, sizeof(server));
+  memcpy(&server, server_res->ai_addr, server_res->ai_addrlen);
+  freeaddrinfo(server_res);
+
   // Initialize hints used to get socket
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
+  hints.ai_family = server_res->ai_addr->sa_family; // Register same type ai family as server is
   hints.ai_socktype = SOCK_DGRAM;
   hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV; // Fill client ip, and specify NUMERICSERV explicitly as we will use
   // "0" service.
@@ -102,24 +120,6 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
   strcpy(heartbeat_msg, msg);
-
-  // Initialize hints and getaddrinfo of server to store in sockaddr_storage.
-  struct addrinfo server_hints, *server_res;
-  memset(&server_hints, 0, sizeof(server_hints));
-  server_hints.ai_family = AF_UNSPEC;
-  server_hints.ai_socktype = SOCK_DGRAM;
-  hints.ai_flags = AI_NUMERICSERV;
-
-  int rc;
-  if ((rc = getaddrinfo(server_addr, server_port, &server_hints, &server_res)) != 0) {
-    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rc));
-    return -1;
-  }
-
-  // Set static global struct to keep track of server address
-  memset(&server, 0, sizeof(server));
-  memcpy(&server, server_res->ai_addr, server_res->ai_addrlen);
-  freeaddrinfo(server_res);
 
   register_with_server();
 
