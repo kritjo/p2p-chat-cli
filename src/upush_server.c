@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
   hints.ai_family = AF_INET6;
   hints.ai_socktype = SOCK_DGRAM;
   hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV; // Fill out my ip for me, and explicitly specify that service arg is
-                                                // a port number. This is done for added rigidity.
+  // a port number. This is done for added rigidity.
   socketfd = get_bound_socket(hints, NULL, port);
   if (socketfd == -1) {
     fprintf(stderr, "get_bound_socket() in main() failed.\n");
@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
     // Get second part of msg, should be "0" or "1"
     msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL ||
-    (strcmp(msg_part, "0") != 0 && strcmp(msg_part, "1") != 0)) {
+        (strcmp(msg_part, "0") != 0 && strcmp(msg_part, "1") != 0)) {
       print_err_from("illegal datagram", incoming);
       continue;
     }
@@ -137,11 +137,16 @@ int main(int argc, char **argv) {
     char *pkt_num = msg_part;
 
     // The command from the user.
-    enum command { REG, LOOKUP };
+    enum command {
+        REG, LOOKUP
+    };
     enum command curr_command;
     // Get third part of msg, should be "REG" or "LOOKUP"
     msg_part = strtok(NULL, msg_delim);
-    if (msg_part == NULL) { print_err_from("illegal datagram", incoming); continue; }
+    if (msg_part == NULL) {
+      print_err_from("illegal datagram", incoming);
+      continue;
+    }
 
     if (strcmp(msg_part, "REG") == 0) curr_command = REG;
     else if (strcmp(msg_part, "LOOKUP") == 0) curr_command = LOOKUP;
@@ -238,12 +243,12 @@ int main(int argc, char **argv) {
       char port_str[7];
       get_addr(*curr_nick->addr, (char *) &addr_str, INET6_ADDRSTRLEN);
       get_port(*curr_nick->addr, (char *) port_str);
-      if (send_ack(socketfd, incoming,pkt_num, 5,
-               "NICK",
-               msg_part,
-               addr_str,
-               "PORT",
-               port_str) == (size_t) -1) {
+      if (send_ack(socketfd, incoming, pkt_num, 5,
+                   "NICK",
+                   msg_part,
+                   addr_str,
+                   "PORT",
+                   port_str) == (size_t) -1) {
         fprintf(stderr, "send_ack() failed.\n"); // Is without side effects, so we can continue
       }
     }

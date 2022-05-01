@@ -17,9 +17,9 @@ int cmp_addr_port(struct sockaddr_storage first, struct sockaddr_storage second)
 
 char *get_addr(struct sockaddr_storage addr, char *buf, size_t buflen) {
   if (addr.ss_family == AF_INET) {
-    QUIT_ON_NULL("inet_ntop", inet_ntop(addr.ss_family, &((struct sockaddr_in*) &addr)->sin_addr, buf, buflen))
+    QUIT_ON_NULL("inet_ntop", inet_ntop(addr.ss_family, &((struct sockaddr_in *) &addr)->sin_addr, buf, buflen))
   } else {
-    QUIT_ON_NULL("inet_ntop", inet_ntop(addr.ss_family, &((struct sockaddr_in6*) &addr)->sin6_addr, buf, buflen))
+    QUIT_ON_NULL("inet_ntop", inet_ntop(addr.ss_family, &((struct sockaddr_in6 *) &addr)->sin6_addr, buf, buflen))
   }
   return buf;
 }
@@ -35,9 +35,9 @@ socklen_t get_addr_len(struct sockaddr_storage addr) {
 char *get_port(struct sockaddr_storage addr, char *buf) {
   unsigned short port;
   if (addr.ss_family == AF_INET) {
-    port = ntohs(((struct sockaddr_in*) &addr)->sin_port);
+    port = ntohs(((struct sockaddr_in *) &addr)->sin_port);
   } else {
-    port = ntohs(((struct sockaddr_in6*) &addr)->sin6_port);
+    port = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
   }
   if (sprintf(buf, "%hu", port) < 0) {
     fprintf(stderr, "spritntf() failed in get_port()\n");
@@ -46,7 +46,7 @@ char *get_port(struct sockaddr_storage addr, char *buf) {
   return buf;
 }
 
-int get_bound_socket(struct addrinfo hints, char* name, char *service) {
+int get_bound_socket(struct addrinfo hints, char *name, char *service) {
   int rc; // Return code
   struct addrinfo *res, *curr_res;
   int curr_socket;
@@ -117,5 +117,5 @@ void print_err_from(char *msg, struct sockaddr_storage addr) {
   char port_str[7];
   get_addr(addr, addr_str, INET6_ADDRSTRLEN);
   get_port(addr, port_str);
-  fprintf(stderr,"Recived %s from: %s:%s\n", msg, addr_str, port_str);
+  fprintf(stderr, "Recived %s from: %s:%s\n", msg, addr_str, port_str);
 }

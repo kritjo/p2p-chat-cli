@@ -1,5 +1,6 @@
 #include <string.h>
 #include <ctype.h>
+
 char is_legal_nick(char *nick) {
   size_t nick_len = strlen(nick);
   if (20 < nick_len) return 0;

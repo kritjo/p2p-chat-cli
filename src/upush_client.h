@@ -1,7 +1,7 @@
 #ifndef SRC_UPUSH_CLIENT_H
 #define SRC_UPUSH_CLIENT_H
 
-#define HANDLE_EXIT_ON_MINUS_ONE(msg, param) if (param == -1) handle_exit(EXIT_FAILURE);
+#define HANDLE_EXIT_ON_MINUS_ONE(msg, param) if ((param) == -1) handle_exit(EXIT_FAILURE);
 #define MAX_MSG 1460
 #define MY_SOCK_TYPE AF_INET6 // Register AF_INET6 socket as default, as we want IPv4 mapped on IPv6 plus IPv6 native easy
                               // Switch to AF_INET if that is not available on your system or if you want to only use
@@ -11,13 +11,14 @@
 #include "linked_list.h"
 
 
-
 typedef struct recv_node {
     char *expected_msg;
     long stamp; // This is a timestamp (used on initial package). If updated version, reset expected_msg.
 } recv_node_t;
 
-enum nick_node_type { CLIENT, SERVER };
+enum nick_node_type {
+    CLIENT, SERVER
+};
 
 struct nick_node;
 
@@ -44,7 +45,9 @@ typedef struct nick_node {
     struct sockaddr_storage *addr;
 } nick_node_t;
 
-enum sendtype {MSG, LOOKUP};
+enum sendtype {
+    MSG, LOOKUP
+};
 
 typedef struct send_node {
     enum sendtype type; // IF LOOKUP TYPE msg is nick to lookup, nick_node can be null if initial lookup or a node waiting to know if it should try sending again
@@ -72,9 +75,10 @@ void new_lookup(char nick[21], int startmsg, char *new_msg);
 
 void next_lookup();
 
-
 void handle_sig_alarm(__attribute__((unused)) __attribute__((unused)) int sig);
+
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming);
+
 void handle_heartbeat();
 
 void handle_ack(char *msg_delim, struct sockaddr_storage incoming);

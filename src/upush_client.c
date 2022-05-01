@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
   QUIT_ON_MINUSONE("sigaddset", sigaddset(&term_set, SIGTERM))
   QUIT_ON_MINUSONE("sigprocmask", sigprocmask(SIG_BLOCK, &term_set, NULL))
   exitsigfd = signalfd(-1, &term_set, 0);
-  QUIT_ON_MINUSONE("signalfd", exitsigfd);
+  QUIT_ON_MINUSONE("signalfd", exitsigfd)
 
 
   // Initialize the server send_node, we only need one of this so it can be constant to save cycles.
@@ -181,15 +181,15 @@ int main(int argc, char **argv) {
   QUIT_ON_NULL("malloc", recv_head)
   *recv_head = NULL;
 
-  send_head = malloc(sizeof (node_t *));
+  send_head = malloc(sizeof(node_t *));
   QUIT_ON_NULL("malloc", send_head)
   *send_head = NULL;
 
-  nick_head = malloc(sizeof (node_t *));
+  nick_head = malloc(sizeof(node_t *));
   QUIT_ON_NULL("malloc", nick_head)
   *nick_head = NULL;
 
-  timer_head = malloc(sizeof (node_t *));
+  timer_head = malloc(sizeof(node_t *));
   QUIT_ON_NULL("malloc", timer_head)
   *timer_head = NULL;
 
@@ -255,7 +255,7 @@ int main(int argc, char **argv) {
       );
       buf[bytes_received] = '\0';
 
-      HANDLE_EXIT_ON_MINUS_ONE("recvfrom", bytes_received);
+      HANDLE_EXIT_ON_MINUS_ONE("recvfrom", bytes_received)
       if (bytes_received == 0) {
         // Zero length datagrams are allowed and not error.
         continue;
@@ -394,7 +394,7 @@ void register_with_server() {
     );
     buf[bytes_received] = '\0';
 
-    QUIT_ON_MINUSONE("recvfrom", bytes_received);
+    QUIT_ON_MINUSONE("recvfrom", bytes_received)
 
     // Then check correct format "ACK 0 OK"
     if (bytes_received < 9 || strcmp(buf, "ACK 0 OK") != 0) {
@@ -569,7 +569,7 @@ void send_msg(send_node_t *node) {
         20 + strlen(node->pkt_num) + strlen(my_nick) + strlen(node->nick_node->nick) + strlen(node->msg);
     char pkt[pkt_len];
     if (sprintf(pkt, "PKT %s FROM %s TO %s MSG %s", node->pkt_num, my_nick, node->nick_node->nick, node->msg)
-    < 0) {
+        < 0) {
       fprintf(stderr, "sprintf() failed in send_msg\n");
       handle_exit(EXIT_FAILURE);
     }
@@ -669,14 +669,14 @@ void handle_not_ack() {
   // Find the lookup node that failed, print error and continue with next if there are any
   node_t *curr = *send_head;
   while (curr != NULL) {
-    if (((send_node_t *)curr->data)->type == LOOKUP) break;
+    if (((send_node_t *) curr->data)->type == LOOKUP) break;
     curr = curr->next;
   }
   if (curr == NULL) fprintf(stderr, "Could not find lookup node!\n");
   else {
-    send_node_t *node = ((send_node_t *)curr->data);
+    send_node_t *node = ((send_node_t *) curr->data);
     fprintf(stderr, "NICK %s NOT REGISTERED\n", node->msg);
-    char nick[strlen(node->msg)+1];
+    char nick[strlen(node->msg) + 1];
     strcpy(nick, node->msg);
     node->timeout_timer->do_not_honour = 1;
     delete_node(send_head, curr, free_send);
@@ -693,7 +693,7 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
   // Get the nick, the IP and the port and insert to cache. Check if there are any dependency nodes that we should "wake"
   node_t *search = *send_head;
   while (search != NULL) {
-    if (((send_node_t *)search->data)->type == LOOKUP) {
+    if (((send_node_t *) search->data)->type == LOOKUP) {
       break;
     }
     search = search->next;
@@ -702,7 +702,7 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
     fprintf(stderr, "Could not find lookup node to ack\n");
     return;
   }
-  send_node_t *curr = ((send_node_t *)search->data);
+  send_node_t *curr = ((send_node_t *) search->data);
 
   if (strcmp(curr->pkt_num, pkt_num) != 0) {
     return; // Discard wrong ACK.
@@ -774,7 +774,7 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
     node_t *notify = *send_head;
     while (notify != NULL) {
       if (((send_node_t *) notify->data)->type == MSG &&
-      curr->nick_node == ((send_node_t *) notify->data)->nick_node) {
+          curr->nick_node == ((send_node_t *) notify->data)->nick_node) {
         break;
       }
       notify = notify->next;
@@ -784,12 +784,12 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
       return;
     }
     ((send_node_t *) notify->data)->num_tries = RE_0;
-    send_node( ((send_node_t *) notify->data));
+    send_node(((send_node_t *) notify->data));
   } else {
     node_t *curr_n = *send_head;
     while (curr_n != NULL) {
-      if ( ((send_node_t *) curr_n->data)->type == MSG &&
-      strcmp(((send_node_t *) curr_n->data)->nick_node->nick, nick) == 0) {
+      if (((send_node_t *) curr_n->data)->type == MSG &&
+          strcmp(((send_node_t *) curr_n->data)->nick_node->nick, nick) == 0) {
         break;
       }
       curr_n = curr_n->next;
@@ -813,7 +813,7 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
     send_node(((send_node_t *) curr_n->data));
   }
 
-  send_node_t *node = ((send_node_t *)search->data);
+  send_node_t *node = ((send_node_t *) search->data);
   node->timeout_timer->do_not_honour = 1;
   delete_node(send_head, search, free_send);
 
@@ -834,7 +834,7 @@ void handle_wrong_ack(struct sockaddr_storage incoming, char *msg_delim) {
     return;
   }
   fprintf(stderr, "Sent illegal %s to %s\n", msg_part, ((send_node_t *) curr->data)->nick_node->nick);
-  send_node_t *node = ((send_node_t *)curr->data);
+  send_node_t *node = ((send_node_t *) curr->data);
   node->nick_node->available_to_send = 1;
   node->timeout_timer->do_not_honour = 1;
   nick_node_t *curr_n = node->nick_node;
@@ -846,7 +846,8 @@ void handle_ok_ack(struct sockaddr_storage storage) {
   // Find the node to ack
   node_t *curr = *send_head;
   while (curr != NULL) {
-    if (((send_node_t *) curr->data)->type == MSG && cmp_addr_port(*((send_node_t *) curr->data)->nick_node->addr, storage) == 1) {
+    if (((send_node_t *) curr->data)->type == MSG &&
+        cmp_addr_port(*((send_node_t *) curr->data)->nick_node->addr, storage) == 1) {
       break;
     }
     curr = curr->next;
@@ -945,7 +946,10 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
     recv_node->expected_msg = "1";
     char *endptr = alloca(sizeof(char));
     long new_stamp = strtol(pkt_num, &endptr, 10);
-    if (*endptr != '\0' && *pkt_num != '\0') { fprintf(stderr, "Illegal pkt_num!\n"); return; }
+    if (*endptr != '\0' && *pkt_num != '\0') {
+      fprintf(stderr, "Illegal pkt_num!\n");
+      return;
+    }
 
     if (recv_node->stamp != new_stamp) printf("%s: %s\n", nick, msg_part); // If this is not a retransmit
     recv_node->stamp = new_stamp;
@@ -984,7 +988,7 @@ char *pop_msg(nick_node_t *node) {
   if (msg == NULL) return NULL;
   message_node_t *tmp = node->msg_to_send;
   node->msg_to_send = node->msg_to_send->next;
-  free (tmp);
+  free(tmp);
   return msg;
 }
 
@@ -1052,7 +1056,7 @@ void free_timer_node(node_t *node) {
 }
 
 void handle_sig_alarm(__attribute__((unused)) int sig) {
-  fprintf(stderr,"Timeout. Did not get ACK from server on registration.\n");
+  fprintf(stderr, "Timeout. Did not get ACK from server on registration.\n");
   free(heartbeat_msg);
   exit(EXIT_SUCCESS); // This is not an error in the program.
 }
