@@ -585,12 +585,12 @@ void send_msg(send_node_t *node) {
     node->num_tries = WAIT_FOR_LOOKUP;
     queue_lookup(node->nick_node, 1, 0);
     next_lookup();
-    printf("Doing new lookup\n");
   } else if (node->num_tries == WAIT_FOR_LOOKUP || node->num_tries == WAIT_INIT) {
     // Do nothing if we have WAIT states.
   } else {
     // Too many tries
     // Discard msg and get next if any.
+    fprintf(stderr, "NICK %s UNREACHABLE\n", node->nick_node->nick);
     node->nick_node->available_to_send = 1;
     delete_node_by_key(send_head, node->nick_node->nick, free_send);
     next_lookup();
