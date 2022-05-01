@@ -36,13 +36,6 @@ static node_t **timer_head = NULL;
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
 
-  // Handle termination signals gracefully in order to free memory
-  signal(SIGINT, handle_sig_terminate);
-  signal(SIGTERM, handle_sig_terminate);
-
-  // Explicitly ignore unused USR signals, SIGUSR1 is used.
-  signal(SIGUSR2, handle_sig_ignore);
-
   if (argc == 6) {
     my_nick = argv[1];
 
@@ -115,6 +108,14 @@ int main(int argc, char **argv) {
   char msg[msg_len];
   sprintf(msg, "PKT 0 REG %s", my_nick);
   heartbeat_msg = malloc(msg_len * sizeof(char));
+
+  // Handle termination signals gracefully in order to free memory
+  signal(SIGINT, handle_sig_terminate_pre_reg);
+  signal(SIGTERM, handle_sig_terminate_pre_reg);
+
+  // Explicitly ignore unused USR signals, SIGUSR1 is used.
+  signal(SIGUSR2, handle_sig_ignore);
+
   if (heartbeat_msg == NULL) {
     fprintf(stderr, "malloc() failed in main()\n");
     exit(EXIT_FAILURE);
@@ -174,6 +175,10 @@ int main(int argc, char **argv) {
   *nick_head = NULL;
   timer_head = malloc(sizeof (node_t *));
   *timer_head = NULL;
+
+  // Handle termination signals gracefully in order to free memory
+  signal(SIGINT, handle_sig_terminate);
+  signal(SIGTERM, handle_sig_terminate);
   while (1) {
     fd_set fds;
     FD_ZERO(&fds);
@@ -188,6 +193,7 @@ int main(int argc, char **argv) {
       break;
     }
 
+    // SIGINT or SIGTERM
     if (FD_ISSET(exitsigfd, &fds)) {
       handle_exit(EXIT_SUCCESS);
     }
@@ -199,6 +205,7 @@ int main(int argc, char **argv) {
       handle_heartbeat();
     }
 
+    // SIGUSR1
     if (FD_ISSET(timeoutfd, &fds)) {
       // Extract signal from timeoutfd to clear
       struct signalfd_siginfo info;
@@ -279,6 +286,7 @@ int main(int argc, char **argv) {
         if (!find_node(blocked_head, &buf[6])) {
           insert_node(blocked_head, &buf[6], (void *) 1);
         }
+        continue;
       } else if (buf[0] == 'U' &&
                  buf[1] == 'N' &&
                  buf[2] == 'B' &&
@@ -292,6 +300,7 @@ int main(int argc, char **argv) {
           continue;
         }
         delete_node_by_key(blocked_head, &buf[8], NULL);
+        continue;
       }
 
       // Illegal command check
@@ -428,6 +437,7 @@ void new_lookup(char nick[21], int startmsg, char *new_msg) {
   next_lookup();
 }
 
+// Send next message from node's queue if any.
 void next_msg(nick_node_t *node) {
   if (node == NULL) return;
   if (node->available_to_send == 1) {
@@ -464,6 +474,7 @@ void next_msg(nick_node_t *node) {
   }
 }
 
+// Send next lookup from server queue if there is one
 void next_lookup() {
   if (server_node.available_to_send == 1) {
     if (server_node.lookup_node == NULL) return;
@@ -536,10 +547,8 @@ void send_msg(send_node_t *node) {
     queue_lookup(node->nick_node, 1, 0);
     next_lookup();
     printf("Doing new lookup\n");
-
   } else if (node->num_tries == WAIT_FOR_LOOKUP || node->num_tries == WAIT_INIT) {
     // Do nothing if we have WAIT states.
-
   } else {
     // Too many tries
     // Discard msg and get next if any.
@@ -724,7 +733,8 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
 
     node_t *notify = *send_head;
     while (notify != NULL) {
-      if (curr->nick_node == ((send_node_t *) notify->data)->nick_node) {
+      if (((send_node_t *) notify->data)->type == MSG &&
+      curr->nick_node == ((send_node_t *) notify->data)->nick_node) {
         break;
       }
       notify = notify->next;
@@ -1001,6 +1011,12 @@ void handle_sig_alarm(__attribute__((unused)) int sig) {
 
 void handle_sig_terminate(__attribute__((unused)) int sig) {
   handle_exit(EXIT_SUCCESS);
+}
+
+void handle_sig_terminate_pre_reg(__attribute__((unused)) int sig) {
+  free(heartbeat_msg);
+  close(socketfd);
+  exit(EXIT_SUCCESS);
 }
 
 void handle_exit(int status) {

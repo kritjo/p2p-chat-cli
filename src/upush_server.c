@@ -152,25 +152,14 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    // Remove newline from the nickname (if there is one)
-    char nick[nick_len+1];
-    if (msg_part[nick_len - 1] == '\n') {
-      strncpy(nick, msg_part, nick_len - 1);
-      nick[nick_len - 1] = '\0';
-      nick_len--;
-    } else {
-      strcpy(nick, msg_part);
-      nick[nick_len] = '\0';
-    }
-
-    if (!is_legal_nick(nick)) {
+    if (!is_legal_nick(msg_part)) {
       // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
       // likely due to a transmission problem.
       print_illegal_dram(incoming);
       continue;
     }
 
-    node_t *result_node = find_node(nick_head, nick);
+    node_t *result_node = find_node(nick_head, msg_part);
 
     if (curr_command == REG) {
       // Check if nick exists, in that case, replace current address in table.
@@ -188,8 +177,7 @@ int main(int argc, char **argv) {
           exit(EXIT_FAILURE);
         }
 
-
-        insert_node(nick_head, nick, curr_nick);
+        insert_node(nick_head, msg_part, curr_nick);
 
         // Registration completed send ACK
         if (send_ack(socketfd, incoming, pkt_num, 1, "OK") == (size_t) -1) {
@@ -237,7 +225,7 @@ int main(int argc, char **argv) {
       get_port(*curr_nick->addr, (char *) port_str);
       if (send_ack(socketfd, incoming,pkt_num, 5,
                "NICK",
-               nick,
+               msg_part,
                addr_str,
                "PORT",
                port_str) == (size_t) -1) {

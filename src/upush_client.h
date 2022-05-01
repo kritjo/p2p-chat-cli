@@ -104,6 +104,8 @@ void handle_sig_ignore(__attribute__((unused)) int sig) {}
 
 void handle_exit(int status);
 
+void handle_sig_terminate_pre_reg(int sig);
+
 
 const char WAIT_INIT = -1;
 const char DO_NEW_LOOKUP = 2;
