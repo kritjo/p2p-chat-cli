@@ -3,10 +3,10 @@
 
 #include "linked_list.h"
 
-#define MAX_MSG 1460 // Longest msg can be 20 char + 2*nicklen + message
-// Max message length is 1400.
-// Assume that pkt num is 0 or 1.
-// Nicklen is max 20 char
+#define MAX_MSG 1460  // Longest msg can be 20 char + 2*nicklen + message
+                      // Max message length is 1400.
+                      // Assume that pkt num is 0 or 1.
+                      // Nicklen is max 20 char
 
 typedef struct nick_node {
     struct sockaddr_storage *addr;
