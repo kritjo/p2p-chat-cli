@@ -11,21 +11,16 @@
 typedef struct nick_node {
     struct sockaddr_storage *addr;
     time_t *registered_time;
-    struct nick_node *next;
-    struct nick_node *prev;
 } nick_node_t;
 
 void handle_exit(void);
 
-void handle_sig_terminate(int sig);
+void handle_sig_terminate(__attribute__((unused)) int sig);
 
 void print_illegal_dram(struct sockaddr_storage addr);
 
 void free_nick_node(node_t *node);
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-void handle_sig_ignore(int sig) {}
-#pragma GCC diagnostic pop
+void handle_sig_ignore(__attribute__((unused)) int sig) {}
 
 #endif //SRC_UPUSH_SERVER_H

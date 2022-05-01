@@ -18,11 +18,11 @@ static int socketfd;
 static int heartbeatfd;
 static int exitsigfd;
 static int timeoutfd;
+
 static char *heartbeat_msg;
 static struct sockaddr_storage server;
-
-static char *my_nick;
 static nick_node_t server_node;
+static char *my_nick;
 static long timeout;
 
 static node_t **blocked_head = NULL;
@@ -116,6 +116,7 @@ int main(int argc, char **argv) {
     return -1;
   }
 
+  // Set static global struct to keep track of server address
   memset(&server, 0, sizeof(server));
   memcpy(&server, server_res->ai_addr, server_res->ai_addrlen);
   freeaddrinfo(server_res);
@@ -239,9 +240,9 @@ int main(int argc, char **argv) {
       char *msg_part = strtok(buf, msg_delim);
 
       // On all checks, we test if msg_part is NULL first as strcmp declares that the parameters should not be null
-      if (msg_part == NULL) {
-        continue;
-      } else if (strcmp(msg_part, "PKT") == 0) {
+      if (msg_part == NULL) { continue; }
+
+      if (strcmp(msg_part, "PKT") == 0) {
         handle_pkt(msg_delim, incoming);
       } else if (strcmp(msg_part, "ACK") == 0) {
         handle_ack(msg_delim, incoming);
@@ -477,9 +478,6 @@ void next_lookup() {
     new_node->should_free_pkt_num = 0;
     new_node->pkt_num = server_node.next_pkt_num;
     server_node.next_pkt_num = strcmp(server_node.next_pkt_num, "1") == 0 ? "0" : "1";
-
-    new_node->next = NULL;
-    new_node->prev = NULL;
 
     lookup_node_t *lookup = pop_lookup(&server_node);
     new_node->nick_node = lookup->waiting_node;
@@ -919,17 +917,6 @@ void handle_heartbeat() {
   send_packet(socketfd, heartbeat_msg, strlen(heartbeat_msg) + 1, 0, (struct sockaddr *) &server, get_addr_len(server));
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-
-void handle_sig_alarm(int sig) {
-#pragma GCC diagnostic pop
-  printf("Timeout. Did not get ACK from server on registration.\n");
-  free(heartbeat_msg);
-  exit(EXIT_SUCCESS); // This is not an error in the program.
-}
-
-
 void add_msg(nick_node_t *node, char *msg) {
   message_node_t *new_message = malloc(sizeof(message_node_t));
   new_message->message = msg;
@@ -1014,11 +1001,14 @@ void free_timer_node(node_t *node) {
   unregister_usr_1_custom_sig(timer_node);
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-void handle_sig_terminate(int sig) {
-#pragma GCC diagnostic pop
+void handle_sig_alarm(__attribute__((unused)) int sig) {
+  printf("Timeout. Did not get ACK from server on registration.\n");
+  free(heartbeat_msg);
+  exit(EXIT_SUCCESS); // This is not an error in the program.
+}
 
+void handle_sig_terminate(__attribute__((unused)) int sig) {
+  handle_exit(EXIT_SUCCESS);
 }
 
 void handle_exit(int status) {

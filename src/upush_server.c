@@ -129,20 +129,15 @@ int main(int argc, char **argv) {
     char *pkt_num = msg_part;
 
     // The command from the user.
-    enum command {
-        REG, LOOKUP
-    };
+    enum command { REG, LOOKUP };
     enum command curr_command;
     // Get third part of msg, should be "REG" or "LOOKUP"
     msg_part = strtok(NULL, msg_delim);
-    if (msg_part == NULL) {
-      print_illegal_dram(incoming);
-      continue;
-    } else if (strcmp(msg_part, "REG") == 0) {
-      curr_command = REG;
-    } else if (strcmp(msg_part, "LOOKUP") == 0) {
-      curr_command = LOOKUP;
-    } else {
+    if (msg_part == NULL) { print_illegal_dram(incoming); continue; }
+
+    if (strcmp(msg_part, "REG") == 0) curr_command = REG;
+    else if (strcmp(msg_part, "LOOKUP") == 0) curr_command = LOOKUP;
+    else {
       print_illegal_dram(incoming);
       continue;
     }
@@ -188,8 +183,6 @@ int main(int argc, char **argv) {
         curr_nick->addr = malloc(sizeof(struct sockaddr_storage));
         *curr_nick->addr = incoming;
         time(curr_nick->registered_time);
-        curr_nick->next = 0;
-        curr_nick->prev = 0;
 
         if (*curr_nick->registered_time == (time_t) -1) {
           perror("Could not get system time");
@@ -264,10 +257,7 @@ void print_illegal_dram(struct sockaddr_storage addr) {
   printf("Recived illegal datagram from: %s:%s\n", addr_str, port_str);
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-void handle_sig_terminate(int sig) {
-#pragma GCC diagnostic pop
+void handle_sig_terminate(__attribute__((unused)) int sig) {
   handle_exit();
   exit(EXIT_SUCCESS);
 }

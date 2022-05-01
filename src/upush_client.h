@@ -48,8 +48,6 @@ typedef struct send_node {
     char num_tries;
     char *msg;
     struct usr1_sigval *timeout_timer;
-    struct send_node *next;
-    struct send_node *prev;
 } send_node_t;
 
 void handle_ok_ack(struct sockaddr_storage storage);
@@ -69,7 +67,7 @@ void new_lookup(char nick[21], int startmsg, char *new_msg);
 void next_lookup();
 
 
-void handle_sig_alarm(int sig);
+void handle_sig_alarm(__attribute__((unused)) int sig);
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming);
 void handle_heartbeat();
 
@@ -78,8 +76,6 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming);
 void send_node(send_node_t *node);
 
 void queue_lookup(nick_node_t *node, int callback, int free_node);
-
-void maybe_send_msg(nick_node_t *nick_node, char *msg);
 
 void next_msg(nick_node_t *node);
 
@@ -99,12 +95,9 @@ void free_send(node_t *node);
 
 void free_timer_node(node_t *node);
 
-void handle_sig_terminate(int sig);
+void handle_sig_terminate(__attribute__((unused)) int sig);
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-void handle_sig_ignore(int sig) {}
-#pragma GCC diagnostic pop
+void handle_sig_ignore(__attribute__((unused)) int sig) {}
 
 void handle_exit(int status);
 
