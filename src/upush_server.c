@@ -177,8 +177,6 @@ int main(int argc, char **argv) {
       if (result_node == NULL) {
         // Now we know that the nick does not exist.
         nick_node_t *curr_nick = malloc(sizeof(nick_node_t));
-        char *pers_nick = malloc((nick_len + 1) * sizeof(char));
-        strcpy(pers_nick, nick);
         curr_nick->registered_time = malloc(sizeof(time_t));
         curr_nick->addr = malloc(sizeof(struct sockaddr_storage));
         *curr_nick->addr = incoming;
@@ -191,7 +189,7 @@ int main(int argc, char **argv) {
         }
 
 
-        insert_node(nick_head, pers_nick, curr_nick);
+        insert_node(nick_head, nick, curr_nick);
 
         // Registration completed send ACK
         if (send_ack(socketfd, incoming, pkt_num, 1, "OK") == (size_t) -1) {
@@ -265,10 +263,12 @@ void handle_sig_terminate(__attribute__((unused)) int sig) {
 void handle_exit(void) {
   if (socketfd != 0) close(socketfd);
   delete_all_nodes(nick_head, free_nick_node);
+  free(nick_head);
 }
 
 void free_nick_node(node_t *node) {
   nick_node_t *curr_nick = (nick_node_t *) node->data;
   free(curr_nick->registered_time);
   free(curr_nick->addr);
+  free(curr_nick);
 }
