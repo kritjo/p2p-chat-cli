@@ -720,7 +720,6 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
   memcpy(&addr, res->ai_addr, res->ai_addrlen);
   freeaddrinfo(res);
 
-  // We do not want to delete send node (automatically) when it is lookup for existing cache
   // If this is new LOOKUP for existing cache
   if (curr->nick_node != NULL) {
     free(nick);
