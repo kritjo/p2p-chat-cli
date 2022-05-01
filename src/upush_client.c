@@ -721,11 +721,9 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
   freeaddrinfo(res);
 
   // We do not want to delete send node (automatically) when it is lookup for existing cache
-  char should_delete = 1;
   // If this is new LOOKUP for existing cache
   if (curr->nick_node != NULL) {
     free(nick);
-    should_delete = 0;
     nick_node_t *new_node = curr->nick_node;
     *new_node->addr = addr;
     new_node->type = CLIENT;
@@ -772,11 +770,9 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
     send_node(((send_node_t *) curr_n->data));
   }
 
-  if (should_delete) {
-    send_node_t *node = ((send_node_t *)search->data);
-    node->timeout_timer->do_not_honour = 1;
-    delete_node(send_head, search, free_send);
-  }
+  send_node_t *node = ((send_node_t *)search->data);
+  node->timeout_timer->do_not_honour = 1;
+  delete_node(send_head, search, free_send);
 
   server_node.available_to_send = 1;
   next_lookup();
