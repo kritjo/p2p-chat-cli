@@ -22,4 +22,6 @@ int get_bound_socket(struct addrinfo hints, char *name, char *service);
 
 size_t send_ack(int socketfd, struct sockaddr_storage addr, char *pkt_num, int num_args, ...);
 
+void print_err_from(char *msg, struct sockaddr_storage addr);
+
 #endif //SRC_NETWORK_UTILS_H

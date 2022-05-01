@@ -17,8 +17,6 @@ void handle_exit(void);
 
 void handle_sig_terminate(__attribute__((unused)) int sig);
 
-void print_illegal_dram(struct sockaddr_storage addr);
-
 void free_nick_node(node_t *node);
 
 void handle_sig_alarm(__attribute__((unused)) int sig);

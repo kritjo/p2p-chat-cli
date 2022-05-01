@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
     } else if (bytes_received < 12) {
       // Zero length datagrams are allowed and not error.
       // Min valid format datagram is "PKT 0 REG a" this is likely due to transmission error, do not send ack.
-      print_illegal_dram(incoming);
+      print_err_from("illegal datagram", incoming);
       continue;
     }
 
@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
 
     // On all checks, we test if msg_part is NULL first as strcmp declares that the parameters should not be null
     if (msg_part == NULL || strcmp(msg_part, "PKT") != 0) {
-      print_illegal_dram(incoming);
+      print_err_from("illegal datagram", incoming);
       continue;
     }
 
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     msg_part = strtok(NULL, msg_delim);
     if (msg_part == NULL ||
     (strcmp(msg_part, "0") != 0 && strcmp(msg_part, "1") != 0)) {
-      print_illegal_dram(incoming);
+      print_err_from("illegal datagram", incoming);
       continue;
     }
 
@@ -136,12 +136,12 @@ int main(int argc, char **argv) {
     enum command curr_command;
     // Get third part of msg, should be "REG" or "LOOKUP"
     msg_part = strtok(NULL, msg_delim);
-    if (msg_part == NULL) { print_illegal_dram(incoming); continue; }
+    if (msg_part == NULL) { print_err_from("illegal datagram", incoming); continue; }
 
     if (strcmp(msg_part, "REG") == 0) curr_command = REG;
     else if (strcmp(msg_part, "LOOKUP") == 0) curr_command = LOOKUP;
     else {
-      print_illegal_dram(incoming);
+      print_err_from("illegal datagram", incoming);
       continue;
     }
 
@@ -151,14 +151,14 @@ int main(int argc, char **argv) {
     if (msg_part == NULL || nick_len < 1 || nick_len > 20) {
       // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
       // likely due to a transmission problem.
-      print_illegal_dram(incoming);
+      print_err_from("illegal datagram", incoming);
       continue;
     }
 
     if (!is_legal_nick(msg_part)) {
       // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
       // likely due to a transmission problem.
-      print_illegal_dram(incoming);
+      print_err_from("illegal datagram", incoming);
       continue;
     }
 
@@ -236,14 +236,6 @@ int main(int argc, char **argv) {
       }
     }
   }
-}
-
-void print_illegal_dram(struct sockaddr_storage addr) {
-  char addr_str[INET6_ADDRSTRLEN];
-  char port_str[7];
-  get_addr(addr, addr_str, INET6_ADDRSTRLEN);
-  get_port(addr, port_str);
-  printf("Recived illegal datagram from: %s:%s\n", addr_str, port_str);
 }
 
 void handle_sig_terminate(__attribute__((unused)) int sig) {

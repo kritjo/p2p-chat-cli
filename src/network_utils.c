@@ -107,3 +107,11 @@ size_t send_ack(int socketfd, struct sockaddr_storage addr, char *pkt_num, int n
 
   return send_packet(socketfd, msg, msg_len, 0, (struct sockaddr *) &addr, get_addr_len(addr));
 }
+
+void print_err_from(char *msg, struct sockaddr_storage addr) {
+  char addr_str[INET6_ADDRSTRLEN];
+  char port_str[7];
+  get_addr(addr, addr_str, INET6_ADDRSTRLEN);
+  get_port(addr, port_str);
+  fprintf(stderr,"Recived %s from: %s:%s\n", msg, addr_str, port_str);
+}

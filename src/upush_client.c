@@ -40,6 +40,7 @@ int main(int argc, char **argv) {
     // Check that the nick is legal. That is: only ascii characters and only alpha characters. Max len 20 char
     if (!is_legal_nick(my_nick)) {
       printf("Illegal nickname, only ascii alpha characters are allowed. Max len 20.\n");
+      return EXIT_SUCCESS;
     }
 
     server_addr = argv[2];
@@ -571,7 +572,7 @@ void send_lookup(send_node_t *node) {
     set_time_usr1_timer(node->timeout_timer, timeout);
     node->timeout_timer->do_not_honour = 0;
   } else {
-    printf("NICK %s NOT REACHABLE\n", node->msg);
+    fprintf(stderr, "NICK %s UNREACHABLE\n", node->msg);
 
     // Cleanup send and nick nodes
     char nick[strlen(node->msg)];
@@ -631,7 +632,7 @@ void handle_not_ack() {
   if (curr == NULL) fprintf(stderr, "Could not find lookup node!\n");
   else {
     send_node_t *node = ((send_node_t *)curr->data);
-    printf("NICK %s NOT REGISTERED\n", node->msg);
+    fprintf(stderr, "NICK %s NOT REGISTERED\n", node->msg);
     char nick[strlen(node->msg)+1];
     strcpy(nick, node->msg);
     node->timeout_timer->do_not_honour = 1;
@@ -833,6 +834,7 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, "FROM") != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    print_err_from("message with wrong format", incoming);
     return;
   }
 
@@ -840,6 +842,7 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   size_t nick_len = strlen(msg_part);
   if (msg_part == NULL || nick_len < 1 || nick_len > 20) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    print_err_from("message with wrong format", incoming);
     return;
   }
 
@@ -847,6 +850,7 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   strcpy(nick, msg_part);
   if (!is_legal_nick(nick)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    print_err_from("message with wrong format", incoming);
     return;
   }
 
@@ -855,18 +859,21 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, "TO") != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    print_err_from("message with wrong format", incoming);
     return;
   }
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, my_nick) != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG NAME");
+    print_err_from("message with wrong name", incoming);
     return;
   }
 
   msg_part = strtok(NULL, msg_delim);
   if (msg_part == NULL || (strcmp(msg_part, "MSG") != 0)) {
     send_ack(socketfd, incoming, pkt_num, 1, "WRONG FORMAT");
+    print_err_from("message with wrong format", incoming);
     return;
   }
 
@@ -997,7 +1004,7 @@ void free_timer_node(node_t *node) {
 }
 
 void handle_sig_alarm(__attribute__((unused)) int sig) {
-  printf("Timeout. Did not get ACK from server on registration.\n");
+  fprintf(stderr,"Timeout. Did not get ACK from server on registration.\n");
   free(heartbeat_msg);
   exit(EXIT_SUCCESS); // This is not an error in the program.
 }
