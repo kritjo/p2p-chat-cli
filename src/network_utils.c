@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include "network_utils.h"
 #include "send_packet.h"
+#include "common.h"
 
 int cmp_addr_port(struct sockaddr_storage first, struct sockaddr_storage second) {
   char first_buf_addr[INET6_ADDRSTRLEN];
@@ -16,9 +17,9 @@ int cmp_addr_port(struct sockaddr_storage first, struct sockaddr_storage second)
 
 char *get_addr(struct sockaddr_storage addr, char *buf, size_t buflen) {
   if (addr.ss_family == AF_INET) {
-    inet_ntop(addr.ss_family, &((struct sockaddr_in*) &addr)->sin_addr, buf, buflen);
+    QUIT_ON_NULL("inet_ntop", inet_ntop(addr.ss_family, &((struct sockaddr_in*) &addr)->sin_addr, buf, buflen))
   } else {
-    inet_ntop(addr.ss_family, &((struct sockaddr_in6*) &addr)->sin6_addr, buf, buflen);
+    QUIT_ON_NULL("inet_ntop", inet_ntop(addr.ss_family, &((struct sockaddr_in6*) &addr)->sin6_addr, buf, buflen))
   }
   return buf;
 }
@@ -38,7 +39,10 @@ char *get_port(struct sockaddr_storage addr, char *buf) {
   } else {
     port = ntohs(((struct sockaddr_in6*) &addr)->sin6_port);
   }
-  sprintf(buf, "%hu", port);
+  if (sprintf(buf, "%hu", port) < 0) {
+    fprintf(stderr, "spritntf() failed in get_port()\n");
+    exit(EXIT_FAILURE);
+  }
   return buf;
 }
 

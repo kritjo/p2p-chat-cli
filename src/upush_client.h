@@ -1,6 +1,7 @@
 #ifndef SRC_UPUSH_CLIENT_H
 #define SRC_UPUSH_CLIENT_H
 
+#define HANDLE_EXIT_ON_MINUS_ONE(msg, param) if (param == -1) handle_exit(EXIT_FAILURE);
 #define MAX_MSG 1460
 #define MY_SOCK_TYPE AF_INET6 // Register AF_INET6 socket as default, as we want IPv4 mapped on IPv6 plus IPv6 native easy
                               // Switch to AF_INET if that is not available on your system or if you want to only use
@@ -8,6 +9,8 @@
 
 #include "real_time.h"
 #include "linked_list.h"
+
+
 
 typedef struct recv_node {
     char *expected_msg;

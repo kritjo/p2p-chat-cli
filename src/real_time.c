@@ -3,8 +3,10 @@
 #include <time.h>
 #include <stdio.h>
 #include <signal.h>
-#include <malloc.h>
+#include <stdlib.h>
+
 #include "real_time.h"
+#include "common.h"
 
 int register_usr1_custom_sig(usr1_sigval_t *info) {
   sigevent_t event;
@@ -33,6 +35,6 @@ int set_time_usr1_timer(usr1_sigval_t *info, time_t timeout) {
 }
 
 void unregister_usr_1_custom_sig(usr1_sigval_t *info) {
-  timer_delete(info->timer);
+  QUIT_ON_MINUSONE("timer_delete", timer_delete(info->timer))
   free(info);
 }

@@ -4,10 +4,15 @@
 
 #include <malloc.h>
 #include <string.h>
+#include <stdlib.h>
+
 #include "linked_list.h"
+#include "common.h"
 
 void insert_node(node_t **head, char *key, void *data) {
   node_t *node = malloc(sizeof(node_t));
+  QUIT_ON_NULL("malloc", node);
+
   node->key = malloc(strlen(key) + 1);
   node->data = data;
   strcpy(node->key, key);

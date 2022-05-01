@@ -72,10 +72,15 @@ int main(int argc, char **argv) {
    **************** MAIN LOOP ****************
    */
   nick_head = malloc(sizeof(node_t *));
+  QUIT_ON_NULL("malloc", nick_head)
   *nick_head = NULL;
   printf("Press CTRL+c to quit.\n");
 
-  signal(SIGALRM, handle_sig_alarm);
+  if (signal(SIGALRM, handle_sig_alarm) == SIG_ERR) {
+    fprintf(stderr, "signal() failed in main()\n");
+    handle_exit();
+    exit(EXIT_FAILURE);
+  }
   alarm(TIMEOUT * 2); // Cleanup once a minute.
 
   char buf[MAX_MSG + 1]; // Incoming message buffer
@@ -93,7 +98,7 @@ int main(int argc, char **argv) {
         &addrlen
     );
 
-    if (bytes_received < 0) {
+    if (bytes_received == -1) {
       // -1 is error, and we should quit the server.
       perror("recvfrom");
       handle_exit();
@@ -169,10 +174,13 @@ int main(int argc, char **argv) {
       if (result_node == NULL) {
         // Now we know that the nick does not exist.
         nick_node_t *curr_nick = malloc(sizeof(nick_node_t));
+        QUIT_ON_NULL("malloc", curr_nick)
         curr_nick->registered_time = malloc(sizeof(time_t));
+        QUIT_ON_NULL("malloc", curr_nick->registered_time)
         curr_nick->addr = malloc(sizeof(struct sockaddr_storage));
+        QUIT_ON_NULL("malloc", curr_nick->addr)
         *curr_nick->addr = incoming;
-        time(curr_nick->registered_time);
+        QUIT_ON_MINUSONE("time", time(curr_nick->registered_time))
 
         if (*curr_nick->registered_time == (time_t) -1) {
           perror("Could not get system time");
@@ -193,7 +201,7 @@ int main(int argc, char **argv) {
         nick_node_t *curr_nick = (nick_node_t *) result_node->data;
 
         *curr_nick->addr = incoming;
-        time(curr_nick->registered_time);
+        QUIT_ON_MINUSONE("time", time(curr_nick->registered_time))
         if (*curr_nick->registered_time == (time_t) -1) {
           perror("Could not get system time");
           handle_exit();
@@ -213,7 +221,11 @@ int main(int argc, char **argv) {
       }
 
       time_t current_time;
-      time(&current_time);
+      if (time(&current_time) == (time_t) -1) {
+        perror("time");
+        handle_exit();
+        exit(EXIT_FAILURE);
+      }
       nick_node_t *curr_nick = (nick_node_t *) result_node->data;
 
       if (current_time - *curr_nick->registered_time > TIMEOUT) {
@@ -259,7 +271,11 @@ void free_nick_node(node_t *node) {
 void handle_sig_alarm(__attribute__((unused)) int sig) {
   node_t *curr = *nick_head;
   time_t current_time;
-  time(&current_time);
+  if (time(&current_time) == -1) {
+    perror("time");
+    handle_exit();
+    exit(EXIT_FAILURE);
+  }
   while (curr != NULL) {
     nick_node_t *node = curr->data;
     node_t *tmp = curr;
