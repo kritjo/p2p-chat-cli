@@ -36,15 +36,14 @@ int main(int argc, char **argv) {
 
     // Using strtol to avoid undefined behaviour
     long tmp;
-    // TODO: DO NOT ASSUME THAT WE GET CORRECT PORT NUM
-    tmp = strtol(argv[2], NULL, 10);
-    // TODO: change <= to < on release
-    if (0 <= tmp && tmp <= 100) {
+    char *endptr = alloca(sizeof(char));
+    tmp = strtol(argv[2], &endptr, 10);
+    if (*endptr == '\0' && (0 <= tmp && tmp <= 100)) {
       loss_probability = (char) tmp;
       srand48(time(0)); // Seed the rand
       set_loss_probability((float) loss_probability / 100.0f);
     } else {
-      printf("Illegal loss probability. Enter a number between 0 and 100.\n");
+      printf("Illegal loss probability. Enter a number between 0 and 100 (inclusive).\n");
       handle_exit();
       return EXIT_SUCCESS; // Return success as this is not an error case, but expected with wrong num
     }

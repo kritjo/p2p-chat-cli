@@ -5,6 +5,7 @@
 #include <bits/types/time_t.h>
 
 typedef struct usr1_sigval{
+    char *id;
     timer_t timer;
     char do_not_honour;
     struct send_node *timed_out_send_node;

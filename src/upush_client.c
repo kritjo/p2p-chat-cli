@@ -15,6 +15,9 @@
 #include "linked_list.h"
 
 static int socketfd;
+static int heartbeatfd;
+static int exitsigfd;
+static int timeoutfd;
 static char *heartbeat_msg;
 static struct sockaddr_storage server;
 
@@ -26,11 +29,19 @@ static node_t **blocked_head = NULL;
 static node_t **recv_head = NULL;
 static node_t **send_head = NULL;
 static node_t **nick_head = NULL;
+static node_t **timer_head = NULL;
 
 // TODO: Maybe add SA_RESTART flag to recvfrom
 
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
+
+  // Handle termination signals gracefully in order to free memory
+  signal(SIGINT, handle_sig_terminate);
+  signal(SIGTERM, handle_sig_terminate);
+
+  // Explicitly ignore unused USR signals, SIGUSR1 is used.
+  signal(SIGUSR2, handle_sig_ignore);
 
   if (argc == 6) {
     my_nick = argv[1];
@@ -43,23 +54,22 @@ int main(int argc, char **argv) {
     server_addr = argv[2];
     server_port = argv[3];
 
-    timeout = strtol(argv[4], NULL, 10);
-    if (timeout < 0 || UINT_MAX < timeout) { // used in alarm that takes unsigned int input
+    char *endptr = alloca(sizeof(char));
+    timeout = strtol(argv[4], &endptr, 10);
+    if (*endptr != '\0' || timeout < 0 || UINT_MAX < timeout) { // used in alarm that takes unsigned int input
       printf("Illegal timeout. Has to be 0 or larger, up to %ud\n", UINT_MAX);
       return EXIT_SUCCESS; // Return success as this is not an error case, but expected with wrong num
     }
 
     // Using strtol to avoid undefined behaviour
     long tmp;
-    // TODO: DO NOT ASSUME THAT WE GET CORRECT PORT NUM
-    tmp = strtol(argv[5], NULL, 10);
-    // TODO: change <= to < on release
-    if (0 <= tmp && tmp <= 100) {
+    tmp = strtol(argv[5], &endptr, 10);
+    if (*endptr == '\0' && (0 <= tmp && tmp <= 100)) {
       loss_probability = (char) tmp;
       srand48(time(0)); // Seed the probability
       set_loss_probability((float) loss_probability / 100.0f);
     } else {
-      printf("Illegal loss probability. Enter a number between 0 and 100.\n");
+      printf("Illegal loss probability. Enter a number between 0 and 100 (inclusive).\n");
       return EXIT_SUCCESS; // Return success as this is not an error case, but expected with wrong num
     }
 
@@ -115,20 +125,28 @@ int main(int argc, char **argv) {
   // Create a file descriptor timer for heartbeat. This is very useful in the select operation below as it does not
   // trigger signal that errors select. Also it is better than select timeout as interval is constant and not dependent
   // on how long time until the loop restarts.
-  int heartbeatfd = timerfd_create(CLOCK_REALTIME, 0);
+  heartbeatfd = timerfd_create(CLOCK_REALTIME, 0);
   struct itimerspec timespec;
   memset(&timespec, 0, sizeof(timespec));
   timespec.it_value.tv_sec = 10;
   timespec.it_interval.tv_sec = 10;
   timerfd_settime(heartbeatfd, 0, &timespec, NULL);
 
-  // Create a signal file descriptor and mask out SIGUSR1. The timeoutfd will be set when SIGUSR1 signal is recieved
+  // Create a signal file descriptor and usr_set out SIGUSR1. The timeoutfd will be set when SIGUSR1 signal is recieved
   // this lets us create a separate timer for each packet that we want timeout from.
-  sigset_t mask;
-  sigemptyset(&mask);
-  sigaddset(&mask, SIGUSR1);
-  sigprocmask(SIG_BLOCK, &mask, NULL);
-  int timeoutfd = signalfd(-1, &mask, 0);
+  sigset_t usr_set;
+  sigemptyset(&usr_set);
+  sigaddset(&usr_set, SIGUSR1);
+  sigprocmask(SIG_BLOCK, &usr_set, NULL);
+  timeoutfd = signalfd(-1, &usr_set, 0);
+
+  // Create a signal file descriptor to catch SIGINT and SIGTERM
+  sigset_t term_set;
+  sigemptyset(&term_set);
+  sigaddset(&term_set, SIGINT);
+  sigaddset(&term_set, SIGTERM);
+  sigprocmask(SIG_BLOCK, &term_set, NULL);
+  exitsigfd = signalfd(-1, &term_set, 0);
 
 
   // Initialize the server send_node, we only need one of this so it can be constant to save cycles.
@@ -153,6 +171,8 @@ int main(int argc, char **argv) {
   *send_head = NULL;
   nick_head = malloc(sizeof (node_t *));
   *nick_head = NULL;
+  timer_head = malloc(sizeof (node_t *));
+  *timer_head = NULL;
   while (1) {
     fd_set fds;
     FD_ZERO(&fds);
@@ -160,10 +180,15 @@ int main(int argc, char **argv) {
     FD_SET(socketfd, &fds);
     FD_SET(heartbeatfd, &fds);
     FD_SET(timeoutfd, &fds);
+    FD_SET(exitsigfd, &fds);
 
     if ((select(FD_SETSIZE, &fds, NULL, NULL, 0)) == -1) {
       perror("select");
       break;
+    }
+
+    if (FD_ISSET(exitsigfd, &fds)) {
+      handle_exit(EXIT_SUCCESS);
     }
 
     if (FD_ISSET(heartbeatfd, &fds)) {
@@ -182,6 +207,8 @@ int main(int argc, char **argv) {
       // ACK and signal. E.g. signal is sent by timer while we do logic to check incoming ACK.
       if (signal_ptr->do_not_honour == 0) {
         send_node(signal_ptr->timed_out_send_node);
+      } else {
+        delete_node_by_key(timer_head, signal_ptr->id, free_timer_node);
       }
     }
 
@@ -235,14 +262,7 @@ int main(int argc, char **argv) {
       buf[count] = '\0';
 
       if (strcmp(buf, "QUIT") == 0) {
-        free(heartbeat_msg);
-        close(socketfd);
-        close(heartbeatfd);
-        delete_all_nodes(recv_head, NULL);
-        delete_all_nodes(blocked_head, NULL);
-        delete_all_nodes(send_head, NULL);
-        delete_all_nodes(nick_head, NULL);
-        return EXIT_SUCCESS;
+        handle_heartbeat(EXIT_SUCCESS);
       }
 
       if (buf[0] == 'B' &&
@@ -315,11 +335,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  free(heartbeat_msg);
-  close(socketfd);
-  close(heartbeatfd);
-  delete_all_nodes(recv_head, NULL);
-  return EXIT_FAILURE;
+  handle_exit(EXIT_FAILURE);
 }
 
 void register_with_server() {
@@ -403,12 +419,15 @@ void new_lookup(char nick[21], int startmsg, char *new_msg) {
   // Alloc and create a new timer, do not set timeout yet. The same timer will be used throughout the send node's
   // lifetime.
   new_send_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+  new_send_node->timeout_timer->id = malloc(256);
+  snprintf(new_send_node->timeout_timer->id, 256, "%ld", time(0));
   new_send_node->timeout_timer->timed_out_send_node = new_send_node;
   register_usr1_custom_sig(new_send_node->timeout_timer);
+  insert_node(timer_head, new_send_node->timeout_timer->id, new_send_node->timeout_timer);
 
   insert_node(send_head, new_nick_node->nick, new_send_node);
 
-  queue_lookup(new_nick_node, 0);
+  queue_lookup(new_nick_node, 0, 0);
   next_lookup();
 }
 
@@ -435,8 +454,11 @@ void next_msg(nick_node_t *node) {
     // Alloc and create a new timer, do not set timeout yet. The same timer will be used throughout the send node's
     // lifetime.
     new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+    new_node->timeout_timer->id = malloc(256);
+    snprintf(new_node->timeout_timer->id, 256, "%ld", time(0));
     new_node->timeout_timer->timed_out_send_node = new_node;
     register_usr1_custom_sig(new_node->timeout_timer);
+    insert_node(timer_head, new_node->timeout_timer->id, new_node->timeout_timer);
 
     insert_node(send_head, node->nick, new_node);
 
@@ -470,8 +492,11 @@ void next_lookup() {
     // Alloc and create a new timer, do not set timeout yet. The same timer will be used throughout the send node's
     // lifetime.
     new_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
+    new_node->timeout_timer->id = malloc(256);
+    snprintf(new_node->timeout_timer->id, 256, "%ld", time(0));
     new_node->timeout_timer->timed_out_send_node = new_node;
     register_usr1_custom_sig(new_node->timeout_timer);
+    insert_node(timer_head, new_node->timeout_timer->id, new_node->timeout_timer);
 
     // Insert send node in linked list and send the lookup msg
     insert_node(send_head, new_node->msg, new_node);
@@ -479,12 +504,13 @@ void next_lookup() {
   }
 }
 
-void queue_lookup(nick_node_t *node, int callback) {
+void queue_lookup(nick_node_t *node, int callback, int free_node) {
   if (callback) {
     add_lookup(&server_node, node->nick, node);
   } else {
     add_lookup(&server_node, node->nick, NULL);
   }
+  if (free_node == 1) free(node);
 }
 
 void send_node(send_node_t *node) {
@@ -513,7 +539,7 @@ void send_msg(send_node_t *node) {
   } else if (node->num_tries == DO_NEW_LOOKUP) {
     // If we have tried 2 times unsuccsessfully, try new lookup with callback to this when done.
     node->num_tries = WAIT_FOR_LOOKUP;
-    queue_lookup(node->nick_node, 1);
+    queue_lookup(node->nick_node, 1, 0);
     next_lookup();
     printf("Doing new lookup\n");
 
@@ -524,7 +550,7 @@ void send_msg(send_node_t *node) {
     // Too many tries
     // Discard msg and get next if any.
     node->nick_node->available_to_send = 1;
-    delete_node_by_key(send_head, node->nick_node->nick, NULL);
+    delete_node_by_key(send_head, node->nick_node->nick, free_send);
     next_lookup();
   }
 }
@@ -561,20 +587,15 @@ void send_lookup(send_node_t *node) {
       }
 
       if (search_send != NULL) {
+        search_send->timeout_timer->do_not_honour = 1;
         // If this is a MSG type, free the MSG as it will never get sent.
-        if (search_send->type == MSG) {
-          free(search_send->msg);
-        }
-        send_node_t *pSendNode = ((send_node_t *)search->data);
-        unregister_usr_1_custom_sig(pSendNode->timeout_timer);
-        delete_node(send_head, search, NULL);
+        delete_node(send_head, search, free_send);
       }
     }
 
     node_t *search = find_node(nick_head, nick);
-    if (search != NULL) delete_node(nick_head, search, NULL);
+    if (search != NULL) delete_node(nick_head, search, free_nick);
     server_node.available_to_send = 1;
-
     next_lookup();
   }
 }
@@ -610,8 +631,14 @@ void handle_not_ack() {
   else {
     send_node_t *node = ((send_node_t *)curr->data);
     printf("NICK %s NOT REGISTERED\n", node->msg);
-    unregister_usr_1_custom_sig(node->timeout_timer);
-    delete_node(send_head, curr, NULL);
+    char nick[strlen(node->msg)+1];
+    strcpy(nick, node->msg);
+    node->timeout_timer->do_not_honour = 1;
+    delete_node(send_head, curr, free_send);
+    send_node_t *msg_node = find_node(send_head, nick)->data;
+    free(msg_node->nick_node->nick);
+    free(msg_node->nick_node);
+    delete_node_by_key(send_head, nick, free_send);
     server_node.available_to_send = 1;
     next_lookup();
   }
@@ -635,7 +662,6 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
   if (strcmp(curr->pkt_num, pkt_num) != 0) {
     return; // Discard wrong ACK.
   }
-
 
   // Get nick
   char *msg_part = strtok(NULL, msg_delim);
@@ -689,8 +715,9 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
 
   addr.ss_family = addrfam;
   memcpy(&addr, res->ai_addr, res->ai_addrlen);
+  freeaddrinfo(res);
 
-  // TODO: Not sure what this does, deletes send_node. Why??
+  // We do not want to delete send node (automatically) when it is lookup for existing cache
   char should_delete = 1;
   // If this is new LOOKUP for existing cache
   if (curr->nick_node != NULL) {
@@ -743,9 +770,10 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
 
   if (should_delete) {
     send_node_t *node = ((send_node_t *)search->data);
-    unregister_usr_1_custom_sig(node->timeout_timer);
-    delete_node(send_head, search, NULL);
+    node->timeout_timer->do_not_honour = 1;
+    delete_node(send_head, search, free_send);
   }
+
   server_node.available_to_send = 1;
   next_lookup();
 }
@@ -765,9 +793,9 @@ void handle_wrong_ack(struct sockaddr_storage incoming, char *msg_delim) {
   fprintf(stderr, "Sent illegal %s to %s\n", msg_part, ((send_node_t *) curr->data)->nick_node->nick);
   send_node_t *node = ((send_node_t *)curr->data);
   node->nick_node->available_to_send = 1;
-  unregister_usr_1_custom_sig(node->timeout_timer);
+  node->timeout_timer->do_not_honour = 1;
   nick_node_t *curr_n = node->nick_node;
-  delete_node(send_head, curr, NULL);
+  delete_node(send_head, curr, free_send);
   next_msg(curr_n);
 }
 
@@ -792,9 +820,8 @@ void handle_ok_ack(struct sockaddr_storage storage) {
   // Cancel timer
   set_time_usr1_timer(((send_node_t *) curr->data)->timeout_timer, 0);
   nick_node_t *curr_n = ((send_node_t *) curr->data)->nick_node;
-  free(((send_node_t *) curr->data)->msg);
-  unregister_usr_1_custom_sig(((send_node_t *) curr->data)->timeout_timer);
-  delete_node(send_head, curr, NULL);
+  ((send_node_t *) curr->data)->timeout_timer->do_not_honour = 1;
+  delete_node(send_head, curr, free_send);
   curr_n->available_to_send = 1;
 
   // Check if there are more messages queued
@@ -870,14 +897,15 @@ void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
   // If this is the first ever message or a new init msg, save stamp.
   if (strcmp(pkt_num, "0") != 0 && strcmp(pkt_num, "1") != 0) {
     recv_node->expected_msg = "1";
-    // TODO: Should probably check endptr
-    long new_stamp = strtol(pkt_num, NULL, 10);
+    char *endptr = alloca(sizeof(char));
+    long new_stamp = strtol(pkt_num, &endptr, 10);
+    if (*endptr != '\0' && *pkt_num != '\0') { fprintf(stderr, "Illegal pkt_num!\n"); return; }
+
     if (recv_node->stamp != new_stamp) printf("%s: %s\n", nick, msg_part); // If this is not a retransmit
     recv_node->stamp = new_stamp;
     send_ack(socketfd, incoming, pkt_num, 1, "OK");
     return;
   }
-
 
   // Send ack if this is previous message but only print if this is new msg.
   send_ack(socketfd, incoming, pkt_num, 1, "OK");
@@ -917,6 +945,7 @@ void add_msg(nick_node_t *node, char *msg) {
 
 char *pop_msg(nick_node_t *node) {
   char *msg = node->msg_to_send->message;
+  if (msg == NULL) return NULL;
   message_node_t *tmp = node->msg_to_send;
   node->msg_to_send = node->msg_to_send->next;
   free (tmp);
@@ -925,6 +954,7 @@ char *pop_msg(nick_node_t *node) {
 
 lookup_node_t *pop_lookup(nick_node_t *node) {
   lookup_node_t *popped = node->lookup_node;
+  if (popped == NULL) return NULL;
   node->lookup_node = node->lookup_node->next;
   return popped;
 }
@@ -941,4 +971,71 @@ void add_lookup(nick_node_t *node, char *nick, nick_node_t *waiting) {
   lookup_node_t *curr = node->lookup_node;
   while (curr->next != NULL) curr = curr->next;
   curr->next = new_lookup;
+}
+
+void free_send(node_t *node) {
+  send_node_t *send_node = (send_node_t *) node->data;
+  if (send_node->should_free_pkt_num) {
+    free(send_node->pkt_num);
+  }
+  if (send_node->type == MSG) {
+    free(send_node->msg);
+  }
+  free(send_node);
+}
+
+void free_nick(node_t *node) {
+  nick_node_t *nick_node = (nick_node_t *) node->data;
+  if (nick_node->type == SERVER) {
+    lookup_node_t *curr = nick_node->lookup_node;
+    while (curr != NULL) {
+      lookup_node_t *tmp = curr->next;
+      free(curr->nick);
+      free(curr);
+      curr = tmp;
+    }
+  } else {
+    message_node_t *curr = nick_node->msg_to_send;
+    while (curr != NULL) {
+      message_node_t *tmp = curr->next;
+      free(curr->message);
+      free(curr);
+      curr = tmp;
+    }
+  }
+  free(nick_node->nick);
+  free(nick_node->addr);
+  free(nick_node);
+}
+
+void free_timer_node(node_t *node) {
+  usr1_sigval_t *timer_node = (usr1_sigval_t *) node->data;
+  free(timer_node->id);
+  unregister_usr_1_custom_sig(timer_node);
+}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+void handle_sig_terminate(int sig) {
+#pragma GCC diagnostic pop
+
+}
+
+void handle_exit(int status) {
+  free(heartbeat_msg);
+  close(timeoutfd);
+  close(exitsigfd);
+  close(socketfd);
+  close(heartbeatfd);
+  delete_all_nodes(recv_head, FREE_DATA);
+  delete_all_nodes(blocked_head, NULL);
+  delete_all_nodes(send_head, free_send);
+  delete_all_nodes(nick_head, free_nick);
+  delete_all_nodes(timer_head, free_timer_node);
+  free(blocked_head);
+  free(recv_head);
+  free(send_head);
+  free(nick_head);
+  free(timer_head);
+  exit(status);
 }

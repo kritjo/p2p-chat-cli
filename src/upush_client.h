@@ -4,6 +4,7 @@
 #define MAX_MSG 1460
 
 #include "real_time.h"
+#include "linked_list.h"
 
 typedef struct recv_node {
     char *expected_msg;
@@ -76,7 +77,7 @@ void handle_ack(char *msg_delim, struct sockaddr_storage incoming);
 
 void send_node(send_node_t *node);
 
-void queue_lookup(nick_node_t *node, int callback);
+void queue_lookup(nick_node_t *node, int callback, int free_node);
 
 void maybe_send_msg(nick_node_t *nick_node, char *msg);
 
@@ -91,6 +92,22 @@ char *pop_msg(nick_node_t *node);
 lookup_node_t *pop_lookup(nick_node_t *node);
 
 void register_with_server();
+
+void free_nick(node_t *node);
+
+void free_send(node_t *node);
+
+void free_timer_node(node_t *node);
+
+void handle_sig_terminate(int sig);
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+void handle_sig_ignore(int sig) {}
+#pragma GCC diagnostic pop
+
+void handle_exit(int status);
+
 
 const char WAIT_INIT = -1;
 const char DO_NEW_LOOKUP = 2;
