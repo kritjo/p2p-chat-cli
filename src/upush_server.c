@@ -17,8 +17,6 @@
 static int socketfd = 0;
 static node_t **nick_head = NULL;
 
-// UPS TODO: Mange forskjellige navn registrert på samme ip
-
 int main(int argc, char **argv) {
   char *port, loss_probability;
 
