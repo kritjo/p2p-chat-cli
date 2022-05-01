@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
   // Make the addrinfo struct ready. Do not use SO_REUSEADDR as the server should give error msg on port in use.
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
+  hints.ai_family = AF_INET6;
   hints.ai_socktype = SOCK_DGRAM;
   hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV; // Fill out my ip for me, and explicitly specify that service arg is
                                                 // a port number. This is done for added rigidity.

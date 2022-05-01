@@ -2,6 +2,9 @@
 #define SRC_UPUSH_CLIENT_H
 
 #define MAX_MSG 1460
+#define MY_SOCK_TYPE AF_INET6 // Register AF_INET6 socket as default, as we want IPv4 mapped on IPv6 plus IPv6 native easy
+                              // Switch to AF_INET if that is not available on your system or if you want to only use
+                              // IPv4
 
 #include "real_time.h"
 #include "linked_list.h"

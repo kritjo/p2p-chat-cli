@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
   // Initialize hints used to get socket
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = server_res->ai_addr->sa_family; // Register same type ai family as server is
+  hints.ai_family = MY_SOCK_TYPE;
   hints.ai_socktype = SOCK_DGRAM;
   hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV; // Fill client ip, and specify NUMERICSERV explicitly as we will use
   // "0" service.
@@ -263,7 +263,7 @@ int main(int argc, char **argv) {
       buf[count] = '\0';
 
       if (strcmp(buf, "QUIT") == 0) {
-        handle_heartbeat(EXIT_SUCCESS);
+        handle_exit(EXIT_SUCCESS);
       }
 
       if (buf[0] == 'B' &&
@@ -366,11 +366,7 @@ void register_with_server() {
       perror("recvfrom");
       exit(EXIT_FAILURE);
     }
-    // Then check if the msg we got comes from the server.
-    if (cmp_addr_port(incoming, server) == -1) {
-      // Got incoming bytes from other than server. Ignore.
-      continue;
-    }
+
     // Then check correct format "ACK 0 OK"
     if (bytes_received < 9 || strcmp(buf, "ACK 0 OK") != 0) {
       // Got too few incoming bytes. Ignore.
@@ -798,10 +794,6 @@ void handle_wrong_ack(struct sockaddr_storage incoming, char *msg_delim) {
 }
 
 void handle_ok_ack(struct sockaddr_storage storage) {
-  char server_ack = 0; // State holder 0 = not from server, 1 = from server
-  if (cmp_addr_port(storage, server) == 1) server_ack = 1;
-  if (server_ack == 1) return; // Ignore registration OK
-
   // Find the node to ack
   node_t *curr = *send_head;
   while (curr != NULL) {
@@ -811,7 +803,7 @@ void handle_ok_ack(struct sockaddr_storage storage) {
     curr = curr->next;
   }
   if (curr == NULL) {
-    fprintf(stderr, "Could not find lookup node to ack\n");
+    // Server registrations will fall through here
     return;
   }
 
