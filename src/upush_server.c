@@ -75,6 +75,9 @@ int main(int argc, char **argv) {
   *nick_head = NULL;
   printf("Press CTRL+c to quit.\n");
 
+  signal(SIGALRM, handle_sig_alarm);
+  alarm(TIMEOUT * 2); // Cleanup once a minute.
+
   char buf[MAX_MSG + 1]; // Incoming message buffer
   ssize_t bytes_received;
   socklen_t addrlen = sizeof(struct sockaddr_storage);
@@ -259,4 +262,19 @@ void free_nick_node(node_t *node) {
   free(curr_nick->registered_time);
   free(curr_nick->addr);
   free(curr_nick);
+}
+
+void handle_sig_alarm(__attribute__((unused)) int sig) {
+  node_t *curr = *nick_head;
+  time_t current_time;
+  time(&current_time);
+  while (curr != NULL) {
+    nick_node_t *node = curr->data;
+    node_t *tmp = curr;
+    curr = curr->next;
+    if (current_time - *node->registered_time > TIMEOUT) {
+      delete_node(nick_head, tmp, free_nick_node);
+    }
+  }
+  alarm(TIMEOUT * 2);
 }

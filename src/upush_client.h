@@ -70,7 +70,7 @@ void new_lookup(char nick[21], int startmsg, char *new_msg);
 void next_lookup();
 
 
-void handle_sig_alarm(__attribute__((unused)) int sig);
+void handle_sig_alarm(__attribute__((unused)) __attribute__((unused)) int sig);
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming);
 void handle_heartbeat();
 

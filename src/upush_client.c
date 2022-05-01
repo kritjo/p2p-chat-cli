@@ -31,8 +31,6 @@ static node_t **send_head = NULL;
 static node_t **nick_head = NULL;
 static node_t **timer_head = NULL;
 
-// TODO: Maybe add SA_RESTART flag to recvfrom
-
 int main(int argc, char **argv) {
   char *server_addr, *server_port, loss_probability;
 
