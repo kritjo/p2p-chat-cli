@@ -13,7 +13,7 @@
 #include "network_utils.h"
 #include "common.h"
 
-#define TIMEOUT 30000000
+#define TIMEOUT 30
 static int socketfd = 0;
 static node_t **nick_head = NULL;
 
@@ -162,18 +162,6 @@ int main(int argc, char **argv) {
       print_err_from("illegal datagram", incoming);
       continue;
     }
-
-    // Remove newline from the nickname (if there is one)
-    char nick[nick_len+1];
-    if (msg_part[nick_len - 1] == '\n') {
-      strncpy(nick, msg_part, nick_len - 1);
-      nick[nick_len - 1] = '\0';
-      nick_len--;
-    } else {
-      strcpy(nick, msg_part);
-      nick[nick_len] = '\0';
-    }
-    msg_part = nick;
 
     node_t *result_node = find_node(nick_head, msg_part);
 
