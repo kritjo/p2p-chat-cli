@@ -341,6 +341,7 @@ int main(int argc, char **argv) {
       nick[startmsg - 1] = '\0';
 
       if (buf[startmsg] != ' ' || startmsg == 1) {
+        printf("Illegal command received\n");
         continue; // Illegal nick if it does not end with ' ' or is zero-length
       }
 
