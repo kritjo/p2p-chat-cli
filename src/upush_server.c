@@ -13,7 +13,7 @@
 #include "network_utils.h"
 #include "common.h"
 
-#define TIMEOUT 30
+#define TIMEOUT 30000000
 static int socketfd = 0;
 static node_t **nick_head = NULL;
 
@@ -163,12 +163,17 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    if (!is_legal_nick(msg_part)) {
-      // Assume that clients should send well-formed nicknames, and if they do not, we will not send an ACK as it is
-      // likely due to a transmission problem.
-      print_err_from("illegal datagram", incoming);
-      continue;
+    // Remove newline from the nickname (if there is one)
+    char nick[nick_len+1];
+    if (msg_part[nick_len - 1] == '\n') {
+      strncpy(nick, msg_part, nick_len - 1);
+      nick[nick_len - 1] = '\0';
+      nick_len--;
+    } else {
+      strcpy(nick, msg_part);
+      nick[nick_len] = '\0';
     }
+    msg_part = nick;
 
     node_t *result_node = find_node(nick_head, msg_part);
 

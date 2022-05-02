@@ -87,7 +87,7 @@ void send_node(send_node_t *node);
 
 void queue_lookup(nick_node_t *node, int callback, int free_node);
 
-void next_msg(nick_node_t *node);
+void next_msg(nick_node_t *node, int set_timestamp);
 
 void add_msg(nick_node_t *node, char *msg);
 

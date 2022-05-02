@@ -362,7 +362,7 @@ int main(int argc, char **argv) {
       // Add msg to back of queue
       add_msg(search_result, new_msg);
       // If client is available to send to search, add client to send_node and send msg
-      next_msg(search_result);
+      next_msg(search_result, 0);
     }
   }
 
@@ -417,57 +417,24 @@ void new_lookup(char nick[21], int startmsg, char *new_msg) {
   QUIT_ON_NULL("malloc", nick_persistant)
   strcpy(nick_persistant, nick);
 
-  // Create a new nick node for the lookup, this is not inserted in linked list until we have gotten ip adr and
-  // port from server.
+  // Create a new nick node for the lookup callback
   nick_node_t *new_nick_node = malloc(sizeof(nick_node_t));
   QUIT_ON_NULL("malloc", new_nick_node)
   new_nick_node->nick = nick_persistant;
+  new_nick_node->type = CLIENT;
+  new_nick_node->available_to_send = 0;
+  new_nick_node->next_pkt_num = "0";
   new_nick_node->msg_to_send = NULL;
+  new_nick_node->addr = NULL;
+  add_msg(new_nick_node, new_msg);
 
-  // Create a send node for the message that the user wants to send
-  send_node_t *new_send_node = malloc(sizeof(send_node_t));
-  QUIT_ON_NULL("malloc", new_send_node)
-
-  // We should free the pkt num when this send node is destroyed as it will be malloced
-  // (as opposed to std "0"/"1" pkt nums)
-  new_send_node->should_free_pkt_num = 1;
-
-  // Add a pointer to the new nick node that should be further initialized upon receiving ip adr and port
-  new_send_node->nick_node = new_nick_node;
-
-  // Set the pkt num to the current time to get unique value for this transaction
-  long time_s = time(0);
-  char *long_buf = malloc(256 * sizeof(char));
-  QUIT_ON_NULL("malloc", long_buf)
-  snprintf(long_buf, 256, "%ld", time_s);
-  new_send_node->pkt_num = long_buf;
-
-  new_send_node->msg = new_msg;
-  new_send_node->type = MSG;
-
-  // WAIT_INIT is not used for anything currently, except as an assurance that this will not be sent until lookup
-  // is complete. (This should never happen).
-  new_send_node->num_tries = WAIT_INIT;
-
-  // Alloc and create a new timer, do not set timeout yet. The same timer will be used throughout the send node's
-  // lifetime.
-  new_send_node->timeout_timer = malloc(sizeof(usr1_sigval_t));
-  QUIT_ON_NULL("malloc", new_send_node->timeout_timer)
-  new_send_node->timeout_timer->id = malloc(256);
-  QUIT_ON_NULL("malloc", new_send_node->timeout_timer->id)
-  snprintf(new_send_node->timeout_timer->id, 256, "%ld", time(0));
-  new_send_node->timeout_timer->timed_out_send_node = new_send_node;
-  register_usr1_custom_sig(new_send_node->timeout_timer);
-  insert_node(timer_head, new_send_node->timeout_timer->id, new_send_node->timeout_timer);
-
-  insert_node(send_head, new_nick_node->nick, new_send_node);
-
+  insert_node(nick_head, nick_persistant, new_nick_node);
   queue_lookup(new_nick_node, 0, 0);
   next_lookup();
 }
 
 // Send next message from node's queue if any.
-void next_msg(nick_node_t *node) {
+void next_msg(nick_node_t *node, int set_timestamp) {
   if (node == NULL) return;
   if (node->available_to_send == 1) {
     if (node->msg_to_send == NULL) return;
@@ -478,10 +445,23 @@ void next_msg(nick_node_t *node) {
     QUIT_ON_NULL("malloc", new_node)
     new_node->nick_node = node;
 
-    // pkt num is string literal and should not be freed!
-    new_node->should_free_pkt_num = 0;
+    if (!set_timestamp) {
+      // pkt num is string literal and should not be freed!
+      new_node->should_free_pkt_num = 0;
+      new_node->pkt_num = node->next_pkt_num;
+    } else {
+      // We should free the pkt num when this send node is destroyed as it will be malloced
+      // (as opposed to std "0"/"1" pkt nums)
+      new_node->should_free_pkt_num = 1;
 
-    new_node->pkt_num = node->next_pkt_num;
+      // Set the pkt num to the current time to get unique value for this transaction
+      long time_s = time(0);
+      char *long_buf = malloc(256 * sizeof(char));
+      QUIT_ON_NULL("malloc", long_buf)
+      snprintf(long_buf, 256, "%ld", time_s);
+      new_node->pkt_num = long_buf;
+    }
+
     node->next_pkt_num = strcmp(node->next_pkt_num, "1") == 0 ? "0" : "1";
 
     new_node->msg = pop_msg(node);
@@ -591,8 +571,11 @@ void send_msg(send_node_t *node) {
     // Too many tries
     // Discard msg and get next if any.
     fprintf(stderr, "NICK %s UNREACHABLE\n", node->nick_node->nick);
-    node->nick_node->available_to_send = 1;
-    delete_node_by_key(send_head, node->nick_node->nick, free_send);
+    node_t *nick = find_node(nick_head, node->nick_node->nick);
+    node_t *send = find_node(send_head, node->nick_node->nick);
+    ((send_node_t *)send->data)->timeout_timer->do_not_honour = 1;
+    delete_node(nick_head, nick, free_nick);
+    delete_node(send_head, send, free_send);
     next_lookup();
   }
 }
@@ -616,30 +599,8 @@ void send_lookup(send_node_t *node) {
     node->timeout_timer->do_not_honour = 0;
   } else {
     fprintf(stderr, "NICK %s UNREACHABLE\n", node->msg);
-
-    // Cleanup send and nick nodes
-    char nick[strlen(node->msg)];
-    strcpy(nick, node->msg);
-
-    for (int i = 0; i < 2; i++) { // Do twice to get both LOOKUP and possible MSG nodes
-      node_t *search = find_node(send_head, nick);
-      if (search == NULL) continue;
-      send_node_t *search_send = search->data;
-
-      if (search_send != NULL && search_send->type == MSG && search_send->num_tries == -1) {
-        free(search_send->nick_node->nick);
-        free(search_send->nick_node);
-      }
-
-      if (search_send != NULL) {
-        search_send->timeout_timer->do_not_honour = 1;
-        // If this is a MSG type, free the MSG as it will never get sent.
-        delete_node(send_head, search, free_send);
-      }
-    }
-
-    node_t *search = find_node(nick_head, nick);
-    if (search != NULL) delete_node(nick_head, search, free_nick);
+    delete_node_by_key(nick_head, node->msg, free_nick);
+    delete_node_by_key(send_head, node->msg, free_send);
     server_node.available_to_send = 1;
     next_lookup();
   }
@@ -678,12 +639,9 @@ void handle_not_ack() {
     fprintf(stderr, "NICK %s NOT REGISTERED\n", node->msg);
     char nick[strlen(node->msg) + 1];
     strcpy(nick, node->msg);
+    delete_node_by_key(nick_head, node->msg, free_nick);
     node->timeout_timer->do_not_honour = 1;
     delete_node(send_head, curr, free_send);
-    send_node_t *msg_node = find_node(send_head, nick)->data;
-    free(msg_node->nick_node->nick);
-    free(msg_node->nick_node);
-    delete_node_by_key(send_head, nick, free_send);
     server_node.available_to_send = 1;
     next_lookup();
   }
@@ -767,9 +725,10 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
   if (curr->nick_node != NULL) {
     free(nick);
     nick_node_t *new_node = curr->nick_node;
+    char should_init_send_node = 0;
+    if (cmp_addr_port(*new_node->addr, addr) == -1) should_init_send_node = 1;
     *new_node->addr = addr;
     new_node->type = CLIENT;
-    new_node->available_to_send = 1;
 
     node_t *notify = *send_head;
     while (notify != NULL) {
@@ -784,33 +743,25 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
       return;
     }
     ((send_node_t *) notify->data)->num_tries = RE_0;
+    if (should_init_send_node == 1) {
+      // Set "init flag" on packet as it is a client we have not spoken with yet.
+      ((send_node_t *) notify->data)->should_free_pkt_num = 1;
+      long time_s = time(0);
+      char *long_buf = malloc(256 * sizeof(char));
+      QUIT_ON_NULL("malloc", long_buf)
+      snprintf(long_buf, 256, "%ld", time_s);
+      ((send_node_t *) notify->data)->pkt_num = long_buf;
+    }
     send_node(((send_node_t *) notify->data));
   } else {
-    node_t *curr_n = *send_head;
-    while (curr_n != NULL) {
-      if (((send_node_t *) curr_n->data)->type == MSG &&
-          strcmp(((send_node_t *) curr_n->data)->nick_node->nick, nick) == 0) {
-        break;
-      }
-      curr_n = curr_n->next;
-    }
-    if (curr_n == NULL) {
-      fprintf(stderr, "Could not find expected notify node.\n");
-      return;
-    }
-    nick_node_t *new_node = ((send_node_t *) curr_n->data)->nick_node;
+    nick_node_t *new_node = find_node(nick_head, nick)->data;
     new_node->addr = malloc(sizeof(struct sockaddr_storage));
     QUIT_ON_NULL("malloc", new_node->addr)
     *new_node->addr = addr;
     new_node->type = CLIENT;
-    new_node->available_to_send = 0;
-    new_node->msg_to_send = NULL;
-    new_node->next_pkt_num = "1";
-    insert_node(nick_head, nick, new_node);
+    new_node->available_to_send = 1;
     free(nick);
-
-    ((send_node_t *) curr_n->data)->num_tries = 0;
-    send_node(((send_node_t *) curr_n->data));
+    next_msg(new_node, 1);
   }
 
   send_node_t *node = ((send_node_t *) search->data);
@@ -839,7 +790,7 @@ void handle_wrong_ack(struct sockaddr_storage incoming, char *msg_delim) {
   node->timeout_timer->do_not_honour = 1;
   nick_node_t *curr_n = node->nick_node;
   delete_node(send_head, curr, free_send);
-  next_msg(curr_n);
+  next_msg(curr_n, 0);
 }
 
 void handle_ok_ack(struct sockaddr_storage storage) {
@@ -865,7 +816,7 @@ void handle_ok_ack(struct sockaddr_storage storage) {
   curr_n->available_to_send = 1;
 
   // Check if there are more messages queued
-  next_msg(curr_n);
+  next_msg(curr_n, 0);
 }
 
 void handle_pkt(char *msg_delim, struct sockaddr_storage incoming) {
@@ -1045,7 +996,7 @@ void free_nick(node_t *node) {
     }
   }
   free(nick_node->nick);
-  free(nick_node->addr);
+  if (nick_node->addr != NULL) free(nick_node->addr);
   free(nick_node);
 }
 
