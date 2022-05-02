@@ -599,8 +599,10 @@ void send_lookup(send_node_t *node) {
     node->timeout_timer->do_not_honour = 0;
   } else {
     fprintf(stderr, "NICK %s UNREACHABLE\n", node->msg);
+    char nick[strlen(node->msg) + 1];
+    strcpy(nick, node->msg);
     delete_node_by_key(nick_head, node->msg, free_nick);
-    delete_node_by_key(send_head, node->msg, free_send);
+    delete_node_by_key(send_head, nick, free_send);
     server_node.available_to_send = 1;
     next_lookup();
   }
