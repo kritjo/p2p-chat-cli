@@ -24,6 +24,7 @@ static struct sockaddr_storage server;
 static nick_node_t server_node;
 static char *my_nick;
 static long timeout;
+static long usrtimerid = 0;
 
 static node_t **blocked_head = NULL;
 static node_t **recv_head = NULL;
@@ -474,7 +475,7 @@ void next_msg(nick_node_t *node, int set_timestamp) {
     QUIT_ON_NULL("malloc", new_node->timeout_timer)
     new_node->timeout_timer->id = malloc(256);
     QUIT_ON_NULL("malloc", new_node->timeout_timer->id)
-    snprintf(new_node->timeout_timer->id, 256, "%ld", time(0));
+    snprintf(new_node->timeout_timer->id, 256, "%ld", usrtimerid++);
     new_node->timeout_timer->timed_out_send_node = new_node;
     register_usr1_custom_sig(new_node->timeout_timer);
     insert_node(timer_head, new_node->timeout_timer->id, new_node->timeout_timer);
@@ -513,7 +514,7 @@ void next_lookup() {
     QUIT_ON_NULL("malloc", new_node->timeout_timer)
     new_node->timeout_timer->id = malloc(256);
     QUIT_ON_NULL("malloc", new_node->timeout_timer->id)
-    snprintf(new_node->timeout_timer->id, 256, "%ld", time(0));
+    snprintf(new_node->timeout_timer->id, 256, "%ld", usrtimerid++);
     new_node->timeout_timer->timed_out_send_node = new_node;
     register_usr1_custom_sig(new_node->timeout_timer);
     insert_node(timer_head, new_node->timeout_timer->id, new_node->timeout_timer);
@@ -602,7 +603,12 @@ void send_lookup(send_node_t *node) {
     char nick[strlen(node->msg) + 1];
     strcpy(nick, node->msg);
     delete_node_by_key(nick_head, node->msg, free_nick);
+
+    // We might have both LOOKUP and MSG type send nodes, delete both
     delete_node_by_key(send_head, nick, free_send);
+    node_t *search = find_node(send_head, nick);
+    if (search != NULL) { delete_node(send_head, search, free_send); }
+
     server_node.available_to_send = 1;
     next_lookup();
   }
@@ -723,6 +729,9 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
   memcpy(&addr, res->ai_addr, res->ai_addrlen);
   freeaddrinfo(res);
 
+  // Wait until LOOKUP node is deleted to send msg node, to avoid multiple send node of same type
+  // with same key as this is not allowed
+  nick_node_t *should_send_msg = NULL;
   // If this is new LOOKUP for existing cache
   if (curr->nick_node != NULL) {
     free(nick);
@@ -762,13 +771,17 @@ void handle_nick_ack(char *msg_delim, char pkt_num[256]) {
     *new_node->addr = addr;
     new_node->type = CLIENT;
     new_node->available_to_send = 1;
-    free(nick);
-    next_msg(new_node, 1);
+    should_send_msg = new_node;
   }
 
   send_node_t *node = ((send_node_t *) search->data);
   node->timeout_timer->do_not_honour = 1;
   delete_node(send_head, search, free_send);
+
+  if (should_send_msg != NULL) {
+    next_msg(should_send_msg, 1);
+    free(nick);
+  }
 
   server_node.available_to_send = 1;
   next_lookup();
