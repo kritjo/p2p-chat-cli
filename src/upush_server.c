@@ -42,12 +42,10 @@ int main(int argc, char **argv) {
       set_loss_probability((float) loss_probability / 100.0f);
     } else {
       printf("Illegal loss probability. Enter a number between 0 and 100 (inclusive).\n");
-      handle_exit();
       return EXIT_SUCCESS; // Return success as this is not an error case, but expected with wrong num
     }
   } else {
     printf("USAGE: %s <port> <loss_probability>\n", argv[0]);
-    handle_exit();
     return EXIT_SUCCESS; // Return success as this is not an error, but expected without args.
   }
 
@@ -62,7 +60,6 @@ int main(int argc, char **argv) {
   socketfd = get_bound_socket(hints, NULL, port);
   if (socketfd == -1) {
     fprintf(stderr, "get_bound_socket() in main() failed.\n");
-    handle_exit();
     return EXIT_FAILURE;
   }
 
